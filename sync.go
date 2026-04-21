@@ -5,6 +5,9 @@ import (
 	"net/url"
 	"regexp"
 	"time"
+
+	"github.com/rotisserie/eris"
+	"gorm.io/gorm"
 )
 
 /*
@@ -114,6 +117,125 @@ func ProcessSyncRaw(fullJSON json.RawMessage) SyncResponse {
 	return processRawTweetResults(cleanTweets)
 }
 
+// parseTweet converts a raw Twitter GraphQL JSON message into a structured TweetModel.
+// This is a pure parsing function with no database side effects.
+func parseTweet(res json.RawMessage) (*TweetModel, error) {
+	// 1. Parse minimal fields required for indexing using a comprehensive struct matching common patterns.
+	var tweet struct {
+		Legacy struct {
+			IDStr            string `json:"id_str"`
+			FullText         string `json:"full_text"`
+			CreatedAt        string `json:"created_at"`
+			ExtendedEntities struct {
+				Media []struct {
+					IDStr         string `json:"id_str"`
+					Type          string `json:"type"`
+					MediaURLHttps string `json:"media_url_https"`
+					VideoInfo     struct {
+						Variants []struct {
+							Bitrate     int    `json:"bitrate"`
+							ContentType string `json:"content_type"`
+							URL         string `json:"url"`
+						} `json:"variants"`
+					} `json:"video_info"`
+				} `json:"media"`
+			} `json:"extended_entities"`
+		} `json:"legacy"`
+		Core struct {
+			UserResults struct {
+				Result struct {
+					Core struct {
+						Name       string `json:"name"`
+						ScreenName string `json:"screen_name"`
+					} `json:"core"`
+					Legacy struct {
+						Name       string `json:"name"`
+						ScreenName string `json:"screen_name"`
+					} `json:"legacy"`
+				} `json:"result"`
+			} `json:"user_results"`
+		} `json:"core"`
+	}
+
+	if err := json.Unmarshal(res, &tweet); err != nil {
+		return nil, eris.Wrap(err, "failed to unmarshal tweet JSON")
+	}
+
+	tweetID := tweet.Legacy.IDStr
+	if tweetID == "" {
+		return nil, eris.New("missing tweet ID")
+	}
+
+	// 2. Extract Screen Name with fallback logic.
+	// Try legacy path first, then core path.
+	screenName := tweet.Core.UserResults.Result.Legacy.ScreenName
+	if screenName == "" {
+		screenName = tweet.Core.UserResults.Result.Core.ScreenName
+	}
+	name := tweet.Core.UserResults.Result.Legacy.Name
+	if name == "" {
+		name = tweet.Core.UserResults.Result.Core.Name
+	}
+
+	// Regex Fallback: If struct parsing failed (likely due to unexpected JSON structure or nesting),
+	// try to find the screen_name directly from the raw string. This is critical for generating correct filenames.
+	if screenName == "" {
+		matches := screenNameRegex.FindStringSubmatch(string(res))
+		if len(matches) > 1 {
+			screenName = matches[1]
+			PrintWarningF("Recovered ScreenName via regex for tweet %s: %s", tweetID, screenName)
+		} else {
+			PrintWarningF("Failed to extract ScreenName for tweet %s", tweetID)
+		}
+	}
+
+	// 3. Parse creation time.
+	createdAt, _ := time.Parse(time.RubyDate, tweet.Legacy.CreatedAt)
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+
+	// 4. Construct the TweetModel and MediaModels
+	// Note: We store the raw JSON payload to allow for future re-processing or data recovery.
+	tm := &TweetModel{
+		ID:           tweetID,
+		FullText:     tweet.Legacy.FullText,
+		Name:         name,
+		ScreenName:   screenName,
+		CreatedAt:    createdAt,
+		PermanentURL: "https://x.com/" + screenName + "/status/" + tweetID,
+		RawJSON:      string(res),
+		SyncedAt:     time.Now(),
+	}
+
+	for i, m := range tweet.Legacy.ExtendedEntities.Media {
+		mediaURL := m.MediaURLHttps
+
+		// Handle Video/GIF variants to find best quality
+		if m.Type == "video" || m.Type == "animated_gif" {
+			bestBitrate := -1
+			for _, v := range m.VideoInfo.Variants {
+				if v.ContentType == "video/mp4" {
+					if v.Bitrate > bestBitrate {
+						bestBitrate = v.Bitrate
+						mediaURL = v.URL
+					}
+				}
+			}
+		}
+
+		tm.Media = append(tm.Media, MediaModel{
+			ID:      m.IDStr,
+			TweetID: tweetID,
+			Index:   i,
+			Type:    m.Type,
+			URL:     mediaURL,
+		})
+	}
+
+	return tm, nil
+}
+
 // processRawTweetResults iterates over individual tweet JSON objects, extracts metadata,
 // checks for duplicates, and saves them to the database.
 func processRawTweetResults(results []json.RawMessage) SyncResponse {
@@ -129,67 +251,12 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
 	var savedDebug []savedInfo
 
 	for _, res := range results {
-		// 1. Parse minimal fields required for indexing using a comprehensive struct matching common patterns.
-		var tweet struct {
-			Legacy struct {
-				IDStr            string `json:"id_str"`
-				FullText         string `json:"full_text"`
-				CreatedAt        string `json:"created_at"`
-				ExtendedEntities struct {
-					Media []struct {
-						IDStr         string `json:"id_str"`
-						Type          string `json:"type"`
-						MediaURLHttps string `json:"media_url_https"`
-					} `json:"media"`
-				} `json:"extended_entities"`
-			} `json:"legacy"`
-			Core struct {
-				UserResults struct {
-					Result struct {
-						Core struct {
-							Name       string `json:"name"`
-							ScreenName string `json:"screen_name"`
-						} `json:"core"`
-						Legacy struct {
-							Name       string `json:"name"`
-							ScreenName string `json:"screen_name"`
-						} `json:"legacy"`
-					} `json:"result"`
-				} `json:"user_results"`
-			} `json:"core"`
-		}
-
-		if err := json.Unmarshal(res, &tweet); err != nil {
+		tm, err := parseTweet(res)
+		if err != nil {
 			continue
 		}
 
-		tweetID := tweet.Legacy.IDStr
-		if tweetID == "" {
-			continue
-		}
-
-		// 2. Extract Screen Name with fallback logic.
-		// Try legacy path first, then core path.
-		screenName := tweet.Core.UserResults.Result.Legacy.ScreenName
-		if screenName == "" {
-			screenName = tweet.Core.UserResults.Result.Core.ScreenName
-		}
-		name := tweet.Core.UserResults.Result.Legacy.Name
-		if name == "" {
-			name = tweet.Core.UserResults.Result.Core.Name
-		}
-
-		// Regex Fallback: If struct parsing failed (likely due to unexpected JSON structure or nesting),
-		// try to find the screen_name directly from the raw string. This is critical for generating correct filenames.
-		if screenName == "" {
-			matches := screenNameRegex.FindStringSubmatch(string(res))
-			if len(matches) > 1 {
-				screenName = matches[1]
-				PrintWarningF("Recovered ScreenName via regex for tweet %s: %s", tweetID, screenName)
-			} else {
-				PrintWarningF("Failed to extract ScreenName for tweet %s", tweetID)
-			}
-		}
+		tweetID := tm.ID
 
 		// 3. Check for duplicates in the database.
 		var exists int64
@@ -203,38 +270,11 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
 		}
 		duplicateStreak = 0
 
-		// 4. Parse creation time.
-		createdAt, _ := time.Parse(time.RubyDate, tweet.Legacy.CreatedAt)
-		if createdAt.IsZero() {
-			createdAt = time.Now()
-		}
-
-		// 5. Construct the TweetModel and MediaModels
-		// Note: We store the raw JSON payload to allow for future re-processing or data recovery.
-		tm := &TweetModel{
-			ID:           tweetID,
-			FullText:     tweet.Legacy.FullText,
-			Name:         name,
-			ScreenName:   screenName,
-			CreatedAt:    createdAt,
-			PermanentURL: "https://x.com/" + screenName + "/status/" + tweetID,
-			RawJSON:      string(res),
-			SyncedAt:     time.Now(),
-		}
-
+		// Generate simulated filenames for debug
 		var mediaFilenames []string
-		mediaCount := len(tweet.Legacy.ExtendedEntities.Media)
-		for i, m := range tweet.Legacy.ExtendedEntities.Media {
-			tm.Media = append(tm.Media, MediaModel{
-				ID:      m.IDStr,
-				TweetID: tweetID,
-				Index:   i,
-				Type:    m.Type,
-				URL:     m.MediaURLHttps,
-			})
-
-			// Generate simulated filename for debug
-			if parsedURL, err := url.Parse(m.MediaURLHttps); err == nil {
+		mediaCount := len(tm.Media)
+		for i, m := range tm.Media {
+			if parsedURL, err := url.Parse(m.URL); err == nil {
 				mediaFilenames = append(mediaFilenames, buildFilename(tm, i, mediaCount, parsedURL))
 			}
 		}
@@ -266,4 +306,76 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
 		DuplicateLimitReached: duplicateLimitReached,
 		SavedCount:            savedCount,
 	}
+}
+
+// ReparseTweets updates existing records using their RawJSON with latest parsing logic.
+func ReparseTweets(ids []string) {
+	PrintInfoF("Reparsing %d tweets...", len(ids))
+	successCount := 0
+
+	for _, id := range ids {
+		var tweet TweetModel
+		if err := DB.First(&tweet, "id = ?", id).Error; err != nil {
+			PrintError(eris.Wrapf(err, "Tweet %s not found in DB", id))
+			continue
+		}
+
+		tm, err := parseTweet(json.RawMessage(tweet.RawJSON))
+		if err != nil {
+			PrintError(eris.Wrapf(err, "Failed to parse RawJSON for tweet %s", id))
+			continue
+		}
+
+		// Use a transaction to update tweet and refresh media records
+		err = DB.Transaction(func(tx *gorm.DB) error {
+			// 1. Update Tweet metadata (Upsert)
+			if err := tx.Save(tm).Error; err != nil {
+				return err
+			}
+
+			// 2. Clear and recreate media records (only for this tweet)
+			// We delete the old ones and insert new ones to reflect any parsing changes (like high-res URLs).
+			if err := tx.Unscoped().Delete(&MediaModel{}, "tweet_id = ?", id).Error; err != nil {
+				return err
+			}
+			if len(tm.Media) > 0 {
+				if err := tx.Create(&tm.Media).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+
+		if err != nil {
+			PrintError(eris.Wrapf(err, "Transaction failed for tweet %s", id))
+		} else {
+			successCount++
+		}
+	}
+
+	PrintInfoF("Reparse complete. Updated: %d/%d", successCount, len(ids))
+}
+
+func ReparseMediaTweets() {
+	PrintInfo("Scanning database for tweets with videos or GIFs to re-parse...")
+
+	var ids []string
+	// Find IDs where raw_json contains video or animated_gif tags
+	err := DB.Model(&TweetModel{}).
+		Where("raw_json LIKE ?", "%\"type\":\"video\"%").
+		Or("raw_json LIKE ?", "%\"type\":\"animated_gif\"%").
+		Pluck("id", &ids).Error
+
+	if err != nil {
+		PrintError(eris.Wrap(err, "Failed to query media tweets for re-parsing"))
+		return
+	}
+
+	if len(ids) == 0 {
+		PrintInfo("No media tweets found needing re-parse.")
+		return
+	}
+
+	PrintInfoF("Found %d media tweets. Starting re-parse...", len(ids))
+	ReparseTweets(ids)
 }

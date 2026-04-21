@@ -8,6 +8,7 @@ import (
 
 func main() {
 	importLegacy := flag.Bool("import-legacy", false, "Import legacy JSON files from tweets/ directory")
+	reparseMedia := flag.Bool("reparse-media", false, "Scan DB for all tweets with video/GIF and re-parse them from RawJSON")
 	flag.Parse()
 
 	// 1. Initialize Logger
@@ -23,6 +24,12 @@ func main() {
 		FatalError(eris.Wrap(err, "Failed to init DB"))
 	}
 	PrintInfo("Database initialized successfully")
+
+	// Special Mode: Reparse all media tweets
+	if *reparseMedia {
+		ReparseMediaTweets()
+		return
+	}
 
 	// Special Mode: Import Legacy Data
 	if *importLegacy {
