@@ -20,6 +20,13 @@
   // When the tab is in the foreground a reload would yank the page out from
   // under whoever is reading it, so retry after this instead.
   const AUTO_RETRY_MS = 5 * 60 * 1000
+  // Consecutive failures at which a run gives up.
+  const MAX_SYNC_FAILURES = 5
+  // A POST that never completes counts as no failure at all, so a backend that
+  // accepts the connection and then stalls would leave a scroll running with
+  // nothing to bound it. The handler only touches the local database, media
+  // downloads happening on a worker, so anything this slow is already broken.
+  const SYNC_TIMEOUT_MS = 30 * 1000
 
   console.log('[TBD v0.3] Terminal UI Edition loaded.')
 
@@ -171,6 +178,10 @@
 
     start() {
       if (this.active) return
+      // A fresh run gets a fresh failure budget, so pressing RUN after fixing
+      // the backend behaves like a first attempt rather than inheriting an
+      // already-exhausted count.
+      SyncFailures.reset()
       this.active = true
       UI.setScrolling(true)
       this.loop()
@@ -189,6 +200,37 @@
       this.timer = setTimeout(() => {
         this.loop()
       }, 5000)
+    },
+  }
+
+  // The only thing that ever stops a scroll is the backend saying it has seen
+  // enough duplicates, so an unreachable backend means that signal never comes.
+  // Unattended that would scroll on indefinitely, several requests a minute
+  // against x.com under the user's own account, which is precisely the traffic
+  // pattern worth not producing. Counting consecutive failures bounds it.
+  // No cap is placed on a run that is succeeding: the backend still reporting
+  // new tweets means the scroll is doing real work, and cutting that off would
+  // truncate a legitimate backfill. State resets on reload, so recovering is
+  // just a matter of fixing the backend and letting the next cycle come round.
+  const SyncFailures = {
+    count: 0,
+
+    reset() {
+      this.count = 0
+    },
+
+    note(label) {
+      this.count++
+      if (this.count < MAX_SYNC_FAILURES) {
+        UI.updateStatus(`${label} ${this.count}/${MAX_SYNC_FAILURES}`, '#ff0033')
+        return
+      }
+      Scroller.stop()
+      // updateStatus reverts to the idle text after a couple of seconds, so the
+      // reason a run died would otherwise leave no trace on a tab nobody is
+      // watching.
+      console.error(`[TBD] ${label} x${this.count}, run aborted.`)
+      UI.updateStatus(`ABORTED: ${label}`, '#ff0033')
     },
   }
 
@@ -244,10 +286,12 @@
             url: RAW_SYNC_URL,
             headers: { 'Content-Type': 'application/json' },
             data: responseData,
+            timeout: SYNC_TIMEOUT_MS,
             onload: function (response) {
               try {
                 const res = JSON.parse(response.responseText)
                 if (res.duplicate_limit_reached) {
+                  SyncFailures.reset()
                   if (!UI.isForceMode()) {
                     Scroller.stop()
                     UI.updateStatus('LIMIT REACHED', '#ff0033')
@@ -255,20 +299,32 @@
                     // Silent continuation in Force Mode
                     console.log(`[TBD] Limit hit (Force). Saved: ${res.saved_count}`)
                   }
-                } else {
+                } else if (res.saved_count > 0) {
+                  SyncFailures.reset()
                   UI.updateStatus(`SAVED:${res.saved_count}`, '#0f0')
                   // The backend did not find enough duplicates, so this page was
                   // largely new and more probably waits below it. A reload would
                   // only fetch the same first page again, so paginate by
                   // scrolling. Idempotent while a run is already in progress.
                   Scroller.start()
+                } else {
+                  // Neither new tweets nor the duplicate signal means the
+                  // response carried no usable timeline, which is what x.com
+                  // returns once it starts rate limiting a scroll. Reading that
+                  // as "page was new, keep going" would answer a rate limit with
+                  // more requests, so it spends the same budget as an
+                  // unreachable backend rather than resetting it.
+                  SyncFailures.note('NO DATA')
                 }
               } catch (e) {
-                UI.updateStatus('BACKEND ERR', '#ff0033')
+                SyncFailures.note('BACKEND ERR')
               }
             },
             onerror: function (err) {
-              UI.updateStatus('CONN FAILED', '#ff0033')
+              SyncFailures.note('CONN FAILED')
+            },
+            ontimeout: function () {
+              SyncFailures.note('SYNC TIMEOUT')
             },
           })
         }
