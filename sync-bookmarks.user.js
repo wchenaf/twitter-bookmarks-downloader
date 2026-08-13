@@ -27,6 +27,13 @@
   // nothing to bound it. The handler only touches the local database, media
   // downloads happening on a worker, so anything this slow is already broken.
   const SYNC_TIMEOUT_MS = 30 * 1000
+  // x.com moved bookmarks from /i/bookmarks to /i/history in August 2026. The
+  // old route is kept as well: the underlying GraphQL operation was not renamed
+  // along with the route, which suggests a relabelling that could be reverted
+  // or rolled out unevenly.
+  const SYNC_PATHS = ['/i/bookmarks', '/i/history']
+
+  const onSyncPage = () => SYNC_PATHS.some((p) => window.location.pathname.includes(p))
 
   console.log('[TBD v0.3] Terminal UI Edition loaded.')
 
@@ -95,7 +102,7 @@
         }
         if (!this.el.parentElement) document.body.appendChild(this.el)
 
-        if (window.location.pathname.includes('/i/bookmarks')) {
+        if (onSyncPage()) {
           this.el.style.display = 'flex'
         } else {
           this.el.style.display = 'none'
@@ -234,17 +241,17 @@
     },
   }
 
-  // Unattended sync. Loading /i/bookmarks issues the Bookmarks GraphQL query on
-  // its own, and the interception below picks it up, so a periodic reload is
-  // enough to stay current without anyone pressing RUN. Reloading works while
-  // the tab is hidden; scrolling does not, because the timeline paginates off
-  // rendering that a background tab never performs. That is why this reloads
-  // rather than scrolls, and why it only covers what fits on the first page.
+  // Unattended sync. Loading the bookmarks page issues the Bookmarks GraphQL
+  // query on its own, and the interception below picks it up, so a periodic
+  // reload is enough to stay current without anyone pressing RUN.
+  //
+  // A reload rather than a scroll because new bookmarks arrive at the top of the
+  // timeline: a tab left open for hours is stale exactly where the new items
+  // are, and scrolling only walks further back in time. Once the reload lands
+  // and the backend reports something new, the scroller takes over from there.
+  // Both work in a hidden tab, which was established by testing rather than
+  // inferred from how browsers throttle background tabs.
   const AutoSync = {
-    onBookmarks() {
-      return window.location.pathname.includes('/i/bookmarks')
-    },
-
     schedule(delay = AUTO_RELOAD_MS) {
       // requestAnimationFrame is frozen in a background tab, so nothing here may
       // depend on the UI monitor loop. setTimeout still fires, throttled to
@@ -255,10 +262,24 @@
     fire() {
       // The path is re-checked at fire time rather than at load time so that
       // client-side navigation into or out of the bookmarks page is handled.
-      if (!this.onBookmarks()) return this.schedule()
+      if (!onSyncPage()) return this.schedule()
       if (!document.hidden) return this.schedule(AUTO_RETRY_MS)
       window.location.reload()
     },
+  }
+
+  // Everything here hangs off one string match against an operation name that
+  // x.com owns and can rename without notice, and the failure is silent: no
+  // match simply means no sync. Naming the operations that were seen and passed
+  // over turns the next rename from a mystery into a glance at the console. The
+  // set keeps it to one line per operation instead of one per request.
+  const ignoredOps = new Set()
+
+  const noteIgnoredOp = (url) => {
+    const op = url.split('?')[0].split('/').pop()
+    if (!op || ignoredOps.has(op)) return
+    ignoredOps.add(op)
+    console.log(`[TBD] GraphQL operation seen and ignored: ${op}`)
   }
 
   const PageXHR = unsafeWindow.XMLHttpRequest
@@ -328,6 +349,8 @@
             },
           })
         }
+      } else if (typeof url === 'string' && url.includes('graphql')) {
+        noteIgnoredOp(url)
       }
     }
     self.addEventListener('load', onLoad)
