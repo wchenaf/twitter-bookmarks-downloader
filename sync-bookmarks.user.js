@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Twitter Bookmarks Sync to Local
 // @namespace    http://tampermonkey.net/
-// @version      0.2
-// @description  Intercept XHR to sync bookmarks and provide Auto-Scroll feature.
+// @version      0.3
+// @description  Intercept XHR to sync bookmarks, with auto-scroll and unattended periodic sync.
 // @author       Gemini
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -15,7 +15,13 @@
   'use strict'
   const RAW_SYNC_URL = 'http://localhost:41008/api/sync-raw'
 
-  console.log('[TBD v0.2] Terminal UI Edition loaded.')
+  // How often an idle bookmarks tab reloads itself to pick up new bookmarks.
+  const AUTO_RELOAD_MS = 30 * 60 * 1000
+  // When the tab is in the foreground a reload would yank the page out from
+  // under whoever is reading it, so retry after this instead.
+  const AUTO_RETRY_MS = 5 * 60 * 1000
+
+  console.log('[TBD v0.3] Terminal UI Edition loaded.')
 
   const UI = {
     el: null,
@@ -186,6 +192,33 @@
     },
   }
 
+  // Unattended sync. Loading /i/bookmarks issues the Bookmarks GraphQL query on
+  // its own, and the interception below picks it up, so a periodic reload is
+  // enough to stay current without anyone pressing RUN. Reloading works while
+  // the tab is hidden; scrolling does not, because the timeline paginates off
+  // rendering that a background tab never performs. That is why this reloads
+  // rather than scrolls, and why it only covers what fits on the first page.
+  const AutoSync = {
+    onBookmarks() {
+      return window.location.pathname.includes('/i/bookmarks')
+    },
+
+    schedule(delay = AUTO_RELOAD_MS) {
+      // requestAnimationFrame is frozen in a background tab, so nothing here may
+      // depend on the UI monitor loop. setTimeout still fires, throttled to
+      // roughly once a minute, which is ample at this cadence.
+      setTimeout(() => this.fire(), delay)
+    },
+
+    fire() {
+      // The path is re-checked at fire time rather than at load time so that
+      // client-side navigation into or out of the bookmarks page is handled.
+      if (!this.onBookmarks()) return this.schedule()
+      if (!document.hidden) return this.schedule(AUTO_RETRY_MS)
+      window.location.reload()
+    },
+  }
+
   const PageXHR = unsafeWindow.XMLHttpRequest
   const originalOpen = PageXHR.prototype.open
   const originalSend = PageXHR.prototype.send
@@ -224,6 +257,11 @@
                   }
                 } else {
                   UI.updateStatus(`SAVED:${res.saved_count}`, '#0f0')
+                  // The backend did not find enough duplicates, so this page was
+                  // largely new and more probably waits below it. A reload would
+                  // only fetch the same first page again, so paginate by
+                  // scrolling. Idempotent while a run is already in progress.
+                  Scroller.start()
                 }
               } catch (e) {
                 UI.updateStatus('BACKEND ERR', '#ff0033')
@@ -241,4 +279,5 @@
   }
 
   UI.init()
+  AutoSync.schedule()
 })()
