@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rotisserie/eris"
@@ -22,14 +24,88 @@ func StartDownloadWorker() {
 	ticker := time.NewTicker(5 * time.Second)
 	statusTicker := time.NewTicker(10 * time.Minute)
 
+	// A bookmarks sync arrives one page at a time, seconds apart, so the queue
+	// empties and refills repeatedly over a single run. Firing on the first
+	// empty tick would run the idle command several times per sync; requiring
+	// the queue to stay empty for a while collapses the whole run into one.
+	var (
+		idleTicks int
+		savedRun  int // downloads accumulated since the last time the hook ran
+	)
+
 	for {
 		select {
 		case <-ticker.C:
-			DownloadPendingMedia()
+			attempted, saved := DownloadPendingMedia()
+			savedRun += saved
+			if attempted > 0 {
+				idleTicks = 0
+				continue
+			}
+			// Nothing left to do. Only worth telling anyone if this quiet
+			// followed actual downloads rather than a queue that was already
+			// empty, otherwise the hook would fire every minute forever.
+			if savedRun == 0 {
+				continue
+			}
+			idleTicks++
+			if idleTicks >= idleTicksBeforeHook {
+				// A round the hook refuses keeps its count, so media that
+				// landed while an earlier run was still uploading is handed
+				// off by the next quiet period instead of being dropped.
+				if RunOnIdle(savedRun) {
+					savedRun = 0
+				}
+				idleTicks = 0
+			}
 		case <-statusTicker.C:
 			ReportWorkerStatus(false)
 		}
 	}
+}
+
+// How many consecutive empty ticks count as the queue having settled.
+const idleTicksBeforeHook = 12 // 12 x 5s = one minute
+
+var onIdleRunning atomic.Bool
+
+// RunOnIdle hands off to whatever the user configured once downloads have
+// settled. The command is deliberately opaque to this project: uploading to a
+// particular photo server is not something tbd should promise to support, so
+// the hook stays a generic "something new landed" signal and the choice of what
+// that means lives outside the repository.
+//
+// It reports whether the batch was taken off the caller's hands, which is false
+// only when a previous run is still going: that count has to survive so the
+// media it stands for is not silently forgotten.
+func RunOnIdle(saved int) bool {
+	if config.OnIdleCmd == "" {
+		return true
+	}
+	// Uploads outlast the interval that triggers them, so a second sync
+	// finishing mid-upload must not start a competing run.
+	if !onIdleRunning.CompareAndSwap(false, true) {
+		PrintWarning("Idle command still running, deferring this round")
+		return false
+	}
+
+	go func() {
+		defer onIdleRunning.Store(false)
+
+		PrintInfoF("%d new media settled, running idle command", saved)
+		out, err := exec.Command("sh", "-c", config.OnIdleCmd).CombinedOutput()
+		for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+			if line != "" {
+				PrintInfoF("  | %s", line)
+			}
+		}
+		if err != nil {
+			PrintError(eris.Wrap(err, "Idle command failed"))
+			return
+		}
+		PrintInfo("Idle command finished")
+	}()
+	return true
 }
 
 func ReportWorkerStatus(force bool) {
@@ -50,17 +126,23 @@ func ReportWorkerStatus(force bool) {
 	}
 }
 
-func DownloadPendingMedia() {
+// DownloadPendingMedia returns how many items it took off the queue and how
+// many of those actually landed on disk. The caller needs both: attempted tells
+// it whether the queue still has work, saved tells it whether anything new is
+// worth acting on. An item that keeps failing stays pending until it is struck
+// out, so it keeps attempted above zero and correctly reads as work in progress
+// rather than an idle queue.
+func DownloadPendingMedia() (attempted, saved int) {
 	var mediaList []MediaModel
 	// Find up to 5 pending downloads
 	err := DB.Where("downloaded = ? AND failed = ?", false, false).Limit(5).Find(&mediaList).Error
 	if err != nil {
 		PrintError(eris.Wrap(err, "Failed to query pending media"))
-		return
+		return 0, 0
 	}
 
 	if len(mediaList) == 0 {
-		return
+		return 0, 0
 	}
 
 	for _, media := range mediaList {
@@ -73,11 +155,13 @@ func DownloadPendingMedia() {
 			}
 		} else {
 			media.Downloaded = true
+			saved++
 		}
 		if err := DB.Save(&media).Error; err != nil {
 			PrintError(eris.Wrapf(err, "Failed to update media status for %s", media.ID))
 		}
 	}
+	return len(mediaList), saved
 }
 
 func processMediaDownload(media *MediaModel) error {
