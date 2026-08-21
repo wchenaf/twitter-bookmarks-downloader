@@ -179,11 +179,19 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
 	for _, res := range results {
 		d, err := DeriveTweet(res)
 		if err != nil {
+			// The deriver's errors name the tweet and the offending value;
+			// swallowing them here would defeat their point.
+			PrintError(eris.Wrap(err, "Failed to derive tweet"))
 			continue
 		}
 
-		// Check for duplicates in the database.
-		exists, err := DB.Tweet.Query().Where(tweet.ID(d.ID)).Exist(ctx)
+		// Check for duplicates in the database. Selecting the bookmarked
+		// column rather than calling Exist keeps this a single query while
+		// also answering whether the row needs the upgrade below.
+		bookmarkedValues, err := DB.Tweet.Query().
+			Where(tweet.ID(d.ID)).
+			Select(tweet.FieldBookmarked).
+			Strings(ctx)
 		if err != nil {
 			// Skip without touching duplicateStreak: an unanswered existence
 			// check says nothing about whether the tweet is a duplicate, so it
@@ -191,7 +199,26 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
 			PrintError(eris.Wrapf(err, "Failed to check existence of tweet %s", d.ID))
 			continue
 		}
-		if exists {
+		if len(bookmarkedValues) > 0 {
+			// Appearing on the bookmarks page is proof the tweet is bookmarked
+			// right now, so raising formerly back to yes is safe for any sync;
+			// REBUILD_NOTES 4.3 restricts only the downgrade direction to full
+			// scrapes. Without this path, a tweet downgraded to formerly whose
+			// bookmark later returns (server-side flakiness per 2.5, an
+			// account coming back, or deliberate re-bookmarking) would stay
+			// mislabeled forever. Only bookmarked changes: rating, synced_at,
+			// and the derived columns stay untouched, and the tweet still
+			// counts toward the duplicate streak like any other known one.
+			if tweet.Bookmarked(bookmarkedValues[0]) == tweet.BookmarkedFormerly {
+				err := DB.Tweet.UpdateOneID(d.ID).
+					SetBookmarked(tweet.BookmarkedYes).
+					Exec(ctx)
+				if err != nil {
+					PrintError(eris.Wrapf(err, "Failed to restore bookmarked on tweet %s", d.ID))
+				} else {
+					PrintInfoF("Tweet %s is bookmarked again, restored from formerly to yes", d.ID)
+				}
+			}
 			duplicateStreak++
 			if duplicateStreak >= DUPLICATE_THRESHOLD {
 				duplicateLimitReached = true
@@ -217,6 +244,11 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
 					MediaFiles: mediaFilenames,
 				})
 			}
+		} else {
+			// Recoverable: a still-bookmarked tweet returns on the next sync.
+			// But it must be visible; this is otherwise the loop's only
+			// silent failure path. Counts as neither saved nor duplicate.
+			PrintError(eris.Wrapf(err, "Failed to save tweet %s", d.ID))
 		}
 	}
 

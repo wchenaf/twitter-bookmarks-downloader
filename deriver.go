@@ -152,10 +152,16 @@ func deriveGraphQLTweet(res json.RawMessage) (*DerivedTweet, error) {
 		}
 	}
 
-	// 3. Parse creation time.
-	createdAt, _ := time.Parse(time.RubyDate, tweet.Legacy.CreatedAt)
-	if createdAt.IsZero() {
-		createdAt = time.Now()
+	// 3. Parse creation time. A failure is a hard error, never a substituted
+	// clock: created_at feeds the on-disk filename, the file mtime, and the
+	// database column, so a guessed value becomes three permanent artifacts
+	// and drifts on every reparse. A skipped tweet, by contrast, comes back
+	// with every sync for as long as it stays bookmarked. Realistically a
+	// parse failure means x.com changed the format, which must be loud.
+	createdAt, err := time.Parse(time.RubyDate, tweet.Legacy.CreatedAt)
+	if err != nil {
+		return nil, eris.Wrapf(err, "unparseable created_at %q on tweet %s",
+			tweet.Legacy.CreatedAt, tweetID)
 	}
 
 	// 4. Construct the derived record.
@@ -219,6 +225,13 @@ func deriveLegacyTweet(raw json.RawMessage) (*DerivedTweet, error) {
 
 	if lt.ID == "" {
 		return nil, eris.New("missing tweet ID")
+	}
+
+	// Same rule as the GraphQL branch: a missing timestamp is a hard error,
+	// not a value to invent. Every known tweets/ file carries TimeParsed, so a
+	// zero here means the document is not what this parser thinks it is.
+	if lt.TimeParsed.IsZero() {
+		return nil, eris.Errorf("missing TimeParsed on tweet %s", lt.ID)
 	}
 
 	dt := &DerivedTweet{
