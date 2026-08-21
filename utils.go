@@ -30,20 +30,26 @@ func InitLogger(logPath string) error {
 }
 
 func CloseLogger() {
-	if logFile != nil {
-		err := logFile.Close()
-		if err != nil {
-			FatalError(err)
-		}
+	if logFile == nil {
+		return
 	}
+	if err := logFile.Close(); err != nil {
+		// FatalError would re-enter this function from its cleanup path; the
+		// log file is unusable either way, so a bare stderr line has to do.
+		fmt.Fprintln(os.Stderr, "Failed to close log file:", err)
+	}
+	logFile = nil
 }
 
 func logToFile(t time.Time, level string, message string) {
-	if logFile != nil {
-		_, err := fmt.Fprintln(logFile, t.Format("2006-01-02 15:04:05"), level, message)
-		if err != nil {
-			FatalError(err)
-		}
+	if logFile == nil {
+		return
+	}
+	_, err := fmt.Fprintln(logFile, t.Format("2006-01-02 15:04:05"), level, message)
+	if err != nil {
+		// FatalError logs through emit and thus back through here: a failing
+		// log write escalated to fatal would recurse until the stack died.
+		fmt.Fprintln(os.Stderr, "Failed to write log file:", err)
 	}
 }
 
@@ -84,6 +90,11 @@ func PrintInfoF(format string, args ...any) {
 
 func FatalError(err error) {
 	emit(os.Stderr, fatalColor, "[ERROR]", eris.ToString(err, !isReleaseBuild))
+	// os.Exit skips every deferred cleanup in main, so a fatal exit runs the
+	// same cleanup here. Both closers only warn on failure: escalating from
+	// inside the shutdown path would recurse into FatalError.
+	CloseDB()
+	CloseLogger()
 	os.Exit(1)
 }
 
