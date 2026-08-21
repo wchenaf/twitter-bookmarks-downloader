@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,9 @@ import (
 	"time"
 
 	"github.com/rotisserie/eris"
+
+	"twitter-bookmarks-downloader/ent"
+	"twitter-bookmarks-downloader/ent/media"
 )
 
 func StartDownloadWorker() {
@@ -109,12 +113,15 @@ func RunOnIdle(saved int) bool {
 }
 
 func ReportWorkerStatus(force bool) {
-	var pending int64
-	var failed int64
-	if err := DB.Model(&MediaModel{}).Where("downloaded = ? AND failed = ?", false, false).Count(&pending).Error; err != nil {
+	ctx := context.Background()
+	pending, err := DB.Media.Query().
+		Where(media.Downloaded(false), media.Failed(false)).
+		Count(ctx)
+	if err != nil {
 		PrintError(eris.Wrap(err, "Failed to count pending media"))
 	}
-	if err := DB.Model(&MediaModel{}).Where("failed = ?", true).Count(&failed).Error; err != nil {
+	failed, err := DB.Media.Query().Where(media.Failed(true)).Count(ctx)
+	if err != nil {
 		PrintError(eris.Wrap(err, "Failed to count failed media"))
 	}
 
@@ -133,9 +140,12 @@ func ReportWorkerStatus(force bool) {
 // out, so it keeps attempted above zero and correctly reads as work in progress
 // rather than an idle queue.
 func DownloadPendingMedia() (attempted, saved int) {
-	var mediaList []MediaModel
+	ctx := context.Background()
 	// Find up to 5 pending downloads
-	err := DB.Where("downloaded = ? AND failed = ?", false, false).Limit(5).Find(&mediaList).Error
+	mediaList, err := DB.Media.Query().
+		Where(media.Downloaded(false), media.Failed(false)).
+		Limit(5).
+		All(ctx)
 	if err != nil {
 		PrintError(eris.Wrap(err, "Failed to query pending media"))
 		return 0, 0
@@ -145,66 +155,67 @@ func DownloadPendingMedia() (attempted, saved int) {
 		return 0, 0
 	}
 
-	for _, media := range mediaList {
-		err := processMediaDownload(&media)
-		if err != nil {
-			PrintError(eris.Wrapf(err, "Media ID: %s", media.ID))
-			media.RetryCount++
-			if media.RetryCount >= 3 {
-				media.Failed = true
+	for _, m := range mediaList {
+		update := m.Update()
+		if err := processMediaDownload(ctx, m); err != nil {
+			PrintError(eris.Wrapf(err, "Media ID: %s", m.ID))
+			retryCount := m.RetryCount + 1
+			update.SetRetryCount(retryCount)
+			if retryCount >= 3 {
+				update.SetFailed(true)
 			}
 		} else {
-			media.Downloaded = true
+			update.SetDownloaded(true)
 			saved++
 		}
-		if err := DB.Save(&media).Error; err != nil {
-			PrintError(eris.Wrapf(err, "Failed to update media status for %s", media.ID))
+		if err := update.Exec(ctx); err != nil {
+			PrintError(eris.Wrapf(err, "Failed to update media status for %s", m.ID))
 		}
 	}
 	return len(mediaList), saved
 }
 
-func processMediaDownload(media *MediaModel) error {
-	var tweet TweetModel
-	if err := DB.First(&tweet, "id = ?", media.TweetID).Error; err != nil {
+func processMediaDownload(ctx context.Context, m *ent.Media) error {
+	t, err := DB.Tweet.Get(ctx, m.TweetID)
+	if err != nil {
 		return eris.Wrap(err, "Tweet not found for media")
 	}
 
-	parsedURL, err := url.Parse(media.URL)
+	parsedURL, err := url.Parse(m.URL)
 	if err != nil {
 		return err
 	}
 
 	// 规则 5: Adjust URL for high quality photos
-	if media.Type == "photo" {
+	if m.Type == "photo" {
 		params := parsedURL.Query()
 		params.Set("name", "orig")
 		parsedURL.RawQuery = params.Encode()
 	}
 
 	// Determine total media count for this tweet
-	var mediaCount int64
-	if err := DB.Model(&MediaModel{}).Where("tweet_id = ?", tweet.ID).Count(&mediaCount).Error; err != nil {
+	mediaCount, err := DB.Media.Query().Where(media.TweetID(t.ID)).Count(ctx)
+	if err != nil {
 		return eris.Wrap(err, "Failed to count tweet media")
 	}
 
-	filename := buildFilename(&tweet, media.Index, int(mediaCount), parsedURL)
+	filename := buildFilename(t.ScreenName, t.ID, t.CreatedAt, m.Position, mediaCount, parsedURL)
 	outputPath := path.Join(config.MediaDir, filename)
 
-	if err := downloadFile(parsedURL.String(), outputPath, tweet.CreatedAt); err != nil {
-		return eris.Wrapf(err, "URL: %s (from Tweet: %s)", media.URL, tweet.PermanentURL)
+	if err := downloadFile(parsedURL.String(), outputPath, t.CreatedAt); err != nil {
+		return eris.Wrapf(err, "URL: %s (from Tweet: %s)", m.URL, t.PermanentURL)
 	}
 
 	return nil
 }
 
 // 规则 1, 2, 3, 4: 严格遵循原版文件名规则
-func buildFilename(tweet *TweetModel, index int, total int, url *url.URL) string {
+func buildFilename(screenName, tweetID string, createdAt time.Time, index int, total int, url *url.URL) string {
 	fileExt := strings.ToLower(path.Ext(url.Path))
 	filenameBase := fmt.Sprintf("twitter-@%s-%s-%s",
-		tweet.ScreenName,
-		tweet.CreatedAt.In(time.Local).Format("20060102-150405"),
-		tweet.ID,
+		screenName,
+		createdAt.In(time.Local).Format("20060102-150405"),
+		tweetID,
 	)
 
 	if total > 1 {

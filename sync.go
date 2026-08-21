@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/url"
-	"regexp"
 	"time"
 
 	"github.com/rotisserie/eris"
-	"gorm.io/gorm"
+
+	"twitter-bookmarks-downloader/ent"
+	"twitter-bookmarks-downloader/ent/media"
+	"twitter-bookmarks-downloader/ent/tweet"
 )
 
 /*
@@ -28,19 +31,16 @@ Our Parsing Strategy (in processRawTweetResults):
 1.  Comprehensive Struct Mapping: We define a single, large struct that maps to the most common
     successful response pattern observed (User object nested in `core.user_results.result`).
     We attempt to extract data from multiple known paths within this struct (e.g., trying both `Legacy` and `Core`
-    sub-fields for screen_name).
+    sub-fields for screen_name). This lives in deriver.go, shared with migration and rebuild.
 2.  Regex Fallback (The Safety Net): If struct parsing fails (e.g., due to a new wrapper layer or
     unexpected nulls), we fall back to a regex search on the raw JSON string for `"screen_name":"..."`.
     This ensures that even if the structural shape changes slightly, we can still likely identify the user
     and save the tweet (since preserving the RawJSON allows for future re-parsing).
-3.  Raw Preservation: We always save the original JSON bytes into the database (`RawJSON` column).
+3.  Raw Preservation: We always save the original JSON bytes into the database (`raw_json` column).
     This is crucial for data integrity and allows fixing parsing logic later without losing data.
 */
 
 const DUPLICATE_THRESHOLD = 5 // Stop syncing if we encounter this many existing tweets in a row
-
-// screenNameRegex is our last line of defense to extract the username if JSON structural parsing fails.
-var screenNameRegex = regexp.MustCompile(`"screen_name"\s*:\s*"([^"]+)"`)
 
 // ProcessSyncRaw acts as the entry point. It unwraps the top-level GraphQL envelope
 // to find the actual list of tweet entries.
@@ -117,128 +117,39 @@ func ProcessSyncRaw(fullJSON json.RawMessage) SyncResponse {
 	return processRawTweetResults(cleanTweets)
 }
 
-// parseTweet converts a raw Twitter GraphQL JSON message into a structured TweetModel.
-// This is a pure parsing function with no database side effects.
-func parseTweet(res json.RawMessage) (*TweetModel, error) {
-	// 1. Parse minimal fields required for indexing using a comprehensive struct matching common patterns.
-	var tweet struct {
-		Legacy struct {
-			IDStr            string `json:"id_str"`
-			FullText         string `json:"full_text"`
-			CreatedAt        string `json:"created_at"`
-			ExtendedEntities struct {
-				Media []struct {
-					IDStr         string `json:"id_str"`
-					Type          string `json:"type"`
-					MediaURLHttps string `json:"media_url_https"`
-					VideoInfo     struct {
-						Variants []struct {
-							Bitrate     int    `json:"bitrate"`
-							ContentType string `json:"content_type"`
-							URL         string `json:"url"`
-						} `json:"variants"`
-					} `json:"video_info"`
-				} `json:"media"`
-			} `json:"extended_entities"`
-		} `json:"legacy"`
-		Core struct {
-			UserResults struct {
-				Result struct {
-					Core struct {
-						Name       string `json:"name"`
-						ScreenName string `json:"screen_name"`
-					} `json:"core"`
-					Legacy struct {
-						Name       string `json:"name"`
-						ScreenName string `json:"screen_name"`
-					} `json:"legacy"`
-				} `json:"result"`
-			} `json:"user_results"`
-		} `json:"core"`
-	}
-
-	if err := json.Unmarshal(res, &tweet); err != nil {
-		return nil, eris.Wrap(err, "failed to unmarshal tweet JSON")
-	}
-
-	tweetID := tweet.Legacy.IDStr
-	if tweetID == "" {
-		return nil, eris.New("missing tweet ID")
-	}
-
-	// 2. Extract Screen Name with fallback logic.
-	// Try legacy path first, then core path.
-	screenName := tweet.Core.UserResults.Result.Legacy.ScreenName
-	if screenName == "" {
-		screenName = tweet.Core.UserResults.Result.Core.ScreenName
-	}
-	name := tweet.Core.UserResults.Result.Legacy.Name
-	if name == "" {
-		name = tweet.Core.UserResults.Result.Core.Name
-	}
-
-	// Regex Fallback: If struct parsing failed (likely due to unexpected JSON structure or nesting),
-	// try to find the screen_name directly from the raw string. This is critical for generating correct filenames.
-	if screenName == "" {
-		matches := screenNameRegex.FindStringSubmatch(string(res))
-		if len(matches) > 1 {
-			screenName = matches[1]
-			PrintWarningF("Recovered ScreenName via regex for tweet %s: %s", tweetID, screenName)
-		} else {
-			PrintWarningF("Failed to extract ScreenName for tweet %s", tweetID)
+// createBookmarkedTweet writes a freshly synced bookmark and its media.
+// Seeding rule (REBUILD_NOTES 4.3): a bookmark is itself a cheap positive
+// judgment, so a new tweet arrives as bookmarked=yes with the lowest positive
+// rating. Tweets that already exist are never updated by a sync: incremental
+// syncs may not downgrade bookmarked, and rating belongs to humans.
+func createBookmarkedTweet(ctx context.Context, d *DerivedTweet) error {
+	return WithTx(ctx, func(tx *ent.Tx) error {
+		err := tx.Tweet.Create().
+			SetID(d.ID).
+			SetName(d.Name).
+			SetScreenName(d.ScreenName).
+			SetFullText(d.FullText).
+			SetCreatedAt(d.CreatedAt).
+			SetPermanentURL(d.PermanentURL).
+			SetRawJSON(d.RawJSON).
+			SetSyncedAt(time.Now()).
+			SetBookmarked(tweet.BookmarkedYes).
+			SetRating(1).
+			Exec(ctx)
+		if err != nil {
+			return err
 		}
-	}
-
-	// 3. Parse creation time.
-	createdAt, _ := time.Parse(time.RubyDate, tweet.Legacy.CreatedAt)
-	if createdAt.IsZero() {
-		createdAt = time.Now()
-	}
-
-	// 4. Construct the TweetModel and MediaModels
-	// Note: We store the raw JSON payload to allow for future re-processing or data recovery.
-	tm := &TweetModel{
-		ID:           tweetID,
-		FullText:     tweet.Legacy.FullText,
-		Name:         name,
-		ScreenName:   screenName,
-		CreatedAt:    createdAt,
-		PermanentURL: "https://x.com/" + screenName + "/status/" + tweetID,
-		RawJSON:      string(res),
-		SyncedAt:     time.Now(),
-	}
-
-	for i, m := range tweet.Legacy.ExtendedEntities.Media {
-		mediaURL := m.MediaURLHttps
-
-		// Handle Video/GIF variants to find best quality
-		if m.Type == "video" || m.Type == "animated_gif" {
-			bestBitrate := -1
-			for _, v := range m.VideoInfo.Variants {
-				if v.ContentType == "video/mp4" {
-					if v.Bitrate > bestBitrate {
-						bestBitrate = v.Bitrate
-						mediaURL = v.URL
-					}
-				}
-			}
+		if len(d.Media) == 0 {
+			return nil
 		}
-
-		tm.Media = append(tm.Media, MediaModel{
-			ID:      m.IDStr,
-			TweetID: tweetID,
-			Index:   i,
-			Type:    m.Type,
-			URL:     mediaURL,
-		})
-	}
-
-	return tm, nil
+		return tx.Media.CreateBulk(mediaCreates(tx, d)...).Exec(ctx)
+	})
 }
 
 // processRawTweetResults iterates over individual tweet JSON objects, extracts metadata,
 // checks for duplicates, and saves them to the database.
 func processRawTweetResults(results []json.RawMessage) SyncResponse {
+	ctx := context.Background()
 	savedCount := 0
 	duplicateStreak := 0
 	duplicateLimitReached := false
@@ -264,17 +175,21 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
 	var belowCutoff []belowCutoffEntry
 
 	for _, res := range results {
-		tm, err := parseTweet(res)
+		d, err := DeriveTweet(res)
 		if err != nil {
 			continue
 		}
 
-		tweetID := tm.ID
-
 		// 3. Check for duplicates in the database.
-		var exists int64
-		DB.Model(&TweetModel{}).Where("id = ?", tweetID).Count(&exists)
-		if exists > 0 {
+		exists, err := DB.Tweet.Query().Where(tweet.ID(d.ID)).Exist(ctx)
+		if err != nil {
+			// Skip without touching duplicateStreak: an unanswered existence
+			// check says nothing about whether the tweet is a duplicate, so it
+			// neither extends a run of known tweets nor breaks one.
+			PrintError(eris.Wrapf(err, "Failed to check existence of tweet %s", d.ID))
+			continue
+		}
+		if exists {
 			duplicateStreak++
 			if duplicateStreak >= DUPLICATE_THRESHOLD {
 				duplicateLimitReached = true
@@ -283,20 +198,20 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
 		}
 		duplicateStreak = 0
 
-		if err := DB.Create(tm).Error; err == nil {
+		if err := createBookmarkedTweet(ctx, d); err == nil {
 			savedCount++
 			if duplicateLimitReached {
 				// Filenames the worker is about to derive, so the report names
 				// the files on disk rather than URLs nobody can grep for.
 				var mediaFilenames []string
-				mediaCount := len(tm.Media)
-				for i, m := range tm.Media {
+				mediaCount := len(d.Media)
+				for i, m := range d.Media {
 					if parsedURL, err := url.Parse(m.URL); err == nil {
-						mediaFilenames = append(mediaFilenames, buildFilename(tm, i, mediaCount, parsedURL))
+						mediaFilenames = append(mediaFilenames, buildFilename(d.ScreenName, d.ID, d.CreatedAt, i, mediaCount, parsedURL))
 					}
 				}
 				belowCutoff = append(belowCutoff, belowCutoffEntry{
-					URL:        tm.PermanentURL,
+					URL:        d.PermanentURL,
 					MediaFiles: mediaFilenames,
 				})
 			}
@@ -325,38 +240,45 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
 
 // ReparseTweets updates existing records using their RawJSON with latest parsing logic.
 func ReparseTweets(ids []string) {
+	ctx := context.Background()
 	PrintInfoF("Reparsing %d tweets...", len(ids))
 	successCount := 0
 
 	for _, id := range ids {
-		var tweet TweetModel
-		if err := DB.First(&tweet, "id = ?", id).Error; err != nil {
+		t, err := DB.Tweet.Get(ctx, id)
+		if err != nil {
 			PrintError(eris.Wrapf(err, "Tweet %s not found in DB", id))
 			continue
 		}
 
-		tm, err := parseTweet(json.RawMessage(tweet.RawJSON))
+		d, err := DeriveTweet(json.RawMessage(t.RawJSON))
 		if err != nil {
 			PrintError(eris.Wrapf(err, "Failed to parse RawJSON for tweet %s", id))
 			continue
 		}
 
 		// Use a transaction to update tweet and refresh media records
-		err = DB.Transaction(func(tx *gorm.DB) error {
-			// 1. Update Tweet metadata (Upsert)
-			if err := tx.Save(tm).Error; err != nil {
+		err = WithTx(ctx, func(tx *ent.Tx) error {
+			// 1. Update derived tweet metadata. bookmarked, rating, and
+			// synced_at stay untouched: none of them derive from raw_json.
+			err := tx.Tweet.UpdateOneID(id).
+				SetName(d.Name).
+				SetScreenName(d.ScreenName).
+				SetFullText(d.FullText).
+				SetCreatedAt(d.CreatedAt).
+				SetPermanentURL(d.PermanentURL).
+				Exec(ctx)
+			if err != nil {
 				return err
 			}
 
 			// 2. Clear and recreate media records (only for this tweet)
 			// We delete the old ones and insert new ones to reflect any parsing changes (like high-res URLs).
-			if err := tx.Unscoped().Delete(&MediaModel{}, "tweet_id = ?", id).Error; err != nil {
+			if _, err := tx.Media.Delete().Where(media.TweetID(id)).Exec(ctx); err != nil {
 				return err
 			}
-			if len(tm.Media) > 0 {
-				if err := tx.Create(&tm.Media).Error; err != nil {
-					return err
-				}
+			if len(d.Media) > 0 {
+				return tx.Media.CreateBulk(mediaCreates(tx, d)...).Exec(ctx)
 			}
 			return nil
 		})
@@ -374,13 +296,13 @@ func ReparseTweets(ids []string) {
 func ReparseMediaTweets() {
 	PrintInfo("Scanning database for tweets with videos or GIFs to re-parse...")
 
-	var ids []string
 	// Find IDs where raw_json contains video or animated_gif tags
-	err := DB.Model(&TweetModel{}).
-		Where("raw_json LIKE ?", "%\"type\":\"video\"%").
-		Or("raw_json LIKE ?", "%\"type\":\"animated_gif\"%").
-		Pluck("id", &ids).Error
-
+	ids, err := DB.Tweet.Query().
+		Where(tweet.Or(
+			tweet.RawJSONContains(`"type":"video"`),
+			tweet.RawJSONContains(`"type":"animated_gif"`),
+		)).
+		IDs(context.Background())
 	if err != nil {
 		PrintError(eris.Wrap(err, "Failed to query media tweets for re-parsing"))
 		return

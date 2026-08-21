@@ -23,6 +23,7 @@ func main() {
 	if err != nil {
 		FatalError(eris.Wrap(err, "Failed to init DB"))
 	}
+	defer CloseDB()
 	PrintInfo("Database initialized successfully")
 
 	// Special Mode: Reparse all media tweets
