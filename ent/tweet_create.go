@@ -10,6 +10,8 @@ import (
 	"twitter-bookmarks-downloader/ent/media"
 	"twitter-bookmarks-downloader/ent/tweet"
 
+	"entgo.io/ent/dialect"
+	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 )
@@ -19,6 +21,7 @@ type TweetCreate struct {
 	config
 	mutation *TweetMutation
 	hooks    []Hook
+	conflict []sql.ConflictOption
 }
 
 // SetName sets the "name" field.
@@ -215,6 +218,7 @@ func (_c *TweetCreate) createSpec() (*Tweet, *sqlgraph.CreateSpec) {
 		_node = &Tweet{config: _c.config}
 		_spec = sqlgraph.NewCreateSpec(tweet.Table, sqlgraph.NewFieldSpec(tweet.FieldID, field.TypeString))
 	)
+	_spec.OnConflict = _c.conflict
 	if id, ok := _c.mutation.ID(); ok {
 		_node.ID = id
 		_spec.ID.Value = id
@@ -274,11 +278,394 @@ func (_c *TweetCreate) createSpec() (*Tweet, *sqlgraph.CreateSpec) {
 	return _node, _spec
 }
 
+// OnConflict allows configuring the `ON CONFLICT` / `ON DUPLICATE KEY` clause
+// of the `INSERT` statement. For example:
+//
+//	client.Tweet.Create().
+//		SetName(v).
+//		OnConflict(
+//			// Update the row with the new values
+//			// the was proposed for insertion.
+//			sql.ResolveWithNewValues(),
+//		).
+//		// Override some of the fields with custom
+//		// update values.
+//		Update(func(u *ent.TweetUpsert) {
+//			SetName(v+v).
+//		}).
+//		Exec(ctx)
+func (_c *TweetCreate) OnConflict(opts ...sql.ConflictOption) *TweetUpsertOne {
+	_c.conflict = opts
+	return &TweetUpsertOne{
+		create: _c,
+	}
+}
+
+// OnConflictColumns calls `OnConflict` and configures the columns
+// as conflict target. Using this option is equivalent to using:
+//
+//	client.Tweet.Create().
+//		OnConflict(sql.ConflictColumns(columns...)).
+//		Exec(ctx)
+func (_c *TweetCreate) OnConflictColumns(columns ...string) *TweetUpsertOne {
+	_c.conflict = append(_c.conflict, sql.ConflictColumns(columns...))
+	return &TweetUpsertOne{
+		create: _c,
+	}
+}
+
+type (
+	// TweetUpsertOne is the builder for "upsert"-ing
+	//  one Tweet node.
+	TweetUpsertOne struct {
+		create *TweetCreate
+	}
+
+	// TweetUpsert is the "OnConflict" setter.
+	TweetUpsert struct {
+		*sql.UpdateSet
+	}
+)
+
+// SetName sets the "name" field.
+func (u *TweetUpsert) SetName(v string) *TweetUpsert {
+	u.Set(tweet.FieldName, v)
+	return u
+}
+
+// UpdateName sets the "name" field to the value that was provided on create.
+func (u *TweetUpsert) UpdateName() *TweetUpsert {
+	u.SetExcluded(tweet.FieldName)
+	return u
+}
+
+// SetScreenName sets the "screen_name" field.
+func (u *TweetUpsert) SetScreenName(v string) *TweetUpsert {
+	u.Set(tweet.FieldScreenName, v)
+	return u
+}
+
+// UpdateScreenName sets the "screen_name" field to the value that was provided on create.
+func (u *TweetUpsert) UpdateScreenName() *TweetUpsert {
+	u.SetExcluded(tweet.FieldScreenName)
+	return u
+}
+
+// SetFullText sets the "full_text" field.
+func (u *TweetUpsert) SetFullText(v string) *TweetUpsert {
+	u.Set(tweet.FieldFullText, v)
+	return u
+}
+
+// UpdateFullText sets the "full_text" field to the value that was provided on create.
+func (u *TweetUpsert) UpdateFullText() *TweetUpsert {
+	u.SetExcluded(tweet.FieldFullText)
+	return u
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (u *TweetUpsert) SetCreatedAt(v time.Time) *TweetUpsert {
+	u.Set(tweet.FieldCreatedAt, v)
+	return u
+}
+
+// UpdateCreatedAt sets the "created_at" field to the value that was provided on create.
+func (u *TweetUpsert) UpdateCreatedAt() *TweetUpsert {
+	u.SetExcluded(tweet.FieldCreatedAt)
+	return u
+}
+
+// SetPermanentURL sets the "permanent_url" field.
+func (u *TweetUpsert) SetPermanentURL(v string) *TweetUpsert {
+	u.Set(tweet.FieldPermanentURL, v)
+	return u
+}
+
+// UpdatePermanentURL sets the "permanent_url" field to the value that was provided on create.
+func (u *TweetUpsert) UpdatePermanentURL() *TweetUpsert {
+	u.SetExcluded(tweet.FieldPermanentURL)
+	return u
+}
+
+// SetRawJSON sets the "raw_json" field.
+func (u *TweetUpsert) SetRawJSON(v string) *TweetUpsert {
+	u.Set(tweet.FieldRawJSON, v)
+	return u
+}
+
+// UpdateRawJSON sets the "raw_json" field to the value that was provided on create.
+func (u *TweetUpsert) UpdateRawJSON() *TweetUpsert {
+	u.SetExcluded(tweet.FieldRawJSON)
+	return u
+}
+
+// SetSyncedAt sets the "synced_at" field.
+func (u *TweetUpsert) SetSyncedAt(v time.Time) *TweetUpsert {
+	u.Set(tweet.FieldSyncedAt, v)
+	return u
+}
+
+// UpdateSyncedAt sets the "synced_at" field to the value that was provided on create.
+func (u *TweetUpsert) UpdateSyncedAt() *TweetUpsert {
+	u.SetExcluded(tweet.FieldSyncedAt)
+	return u
+}
+
+// SetBookmarked sets the "bookmarked" field.
+func (u *TweetUpsert) SetBookmarked(v tweet.Bookmarked) *TweetUpsert {
+	u.Set(tweet.FieldBookmarked, v)
+	return u
+}
+
+// UpdateBookmarked sets the "bookmarked" field to the value that was provided on create.
+func (u *TweetUpsert) UpdateBookmarked() *TweetUpsert {
+	u.SetExcluded(tweet.FieldBookmarked)
+	return u
+}
+
+// SetRating sets the "rating" field.
+func (u *TweetUpsert) SetRating(v int8) *TweetUpsert {
+	u.Set(tweet.FieldRating, v)
+	return u
+}
+
+// UpdateRating sets the "rating" field to the value that was provided on create.
+func (u *TweetUpsert) UpdateRating() *TweetUpsert {
+	u.SetExcluded(tweet.FieldRating)
+	return u
+}
+
+// AddRating adds v to the "rating" field.
+func (u *TweetUpsert) AddRating(v int8) *TweetUpsert {
+	u.Add(tweet.FieldRating, v)
+	return u
+}
+
+// UpdateNewValues updates the mutable fields using the new values that were set on create except the ID field.
+// Using this option is equivalent to using:
+//
+//	client.Tweet.Create().
+//		OnConflict(
+//			sql.ResolveWithNewValues(),
+//			sql.ResolveWith(func(u *sql.UpdateSet) {
+//				u.SetIgnore(tweet.FieldID)
+//			}),
+//		).
+//		Exec(ctx)
+func (u *TweetUpsertOne) UpdateNewValues() *TweetUpsertOne {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWithNewValues())
+	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
+		if _, exists := u.create.mutation.ID(); exists {
+			s.SetIgnore(tweet.FieldID)
+		}
+	}))
+	return u
+}
+
+// Ignore sets each column to itself in case of conflict.
+// Using this option is equivalent to using:
+//
+//	client.Tweet.Create().
+//	    OnConflict(sql.ResolveWithIgnore()).
+//	    Exec(ctx)
+func (u *TweetUpsertOne) Ignore() *TweetUpsertOne {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWithIgnore())
+	return u
+}
+
+// DoNothing configures the conflict_action to `DO NOTHING`.
+// Supported only by SQLite and PostgreSQL.
+func (u *TweetUpsertOne) DoNothing() *TweetUpsertOne {
+	u.create.conflict = append(u.create.conflict, sql.DoNothing())
+	return u
+}
+
+// Update allows overriding fields `UPDATE` values. See the TweetCreate.OnConflict
+// documentation for more info.
+func (u *TweetUpsertOne) Update(set func(*TweetUpsert)) *TweetUpsertOne {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(update *sql.UpdateSet) {
+		set(&TweetUpsert{UpdateSet: update})
+	}))
+	return u
+}
+
+// SetName sets the "name" field.
+func (u *TweetUpsertOne) SetName(v string) *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetName(v)
+	})
+}
+
+// UpdateName sets the "name" field to the value that was provided on create.
+func (u *TweetUpsertOne) UpdateName() *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateName()
+	})
+}
+
+// SetScreenName sets the "screen_name" field.
+func (u *TweetUpsertOne) SetScreenName(v string) *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetScreenName(v)
+	})
+}
+
+// UpdateScreenName sets the "screen_name" field to the value that was provided on create.
+func (u *TweetUpsertOne) UpdateScreenName() *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateScreenName()
+	})
+}
+
+// SetFullText sets the "full_text" field.
+func (u *TweetUpsertOne) SetFullText(v string) *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetFullText(v)
+	})
+}
+
+// UpdateFullText sets the "full_text" field to the value that was provided on create.
+func (u *TweetUpsertOne) UpdateFullText() *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateFullText()
+	})
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (u *TweetUpsertOne) SetCreatedAt(v time.Time) *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetCreatedAt(v)
+	})
+}
+
+// UpdateCreatedAt sets the "created_at" field to the value that was provided on create.
+func (u *TweetUpsertOne) UpdateCreatedAt() *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateCreatedAt()
+	})
+}
+
+// SetPermanentURL sets the "permanent_url" field.
+func (u *TweetUpsertOne) SetPermanentURL(v string) *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetPermanentURL(v)
+	})
+}
+
+// UpdatePermanentURL sets the "permanent_url" field to the value that was provided on create.
+func (u *TweetUpsertOne) UpdatePermanentURL() *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdatePermanentURL()
+	})
+}
+
+// SetRawJSON sets the "raw_json" field.
+func (u *TweetUpsertOne) SetRawJSON(v string) *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetRawJSON(v)
+	})
+}
+
+// UpdateRawJSON sets the "raw_json" field to the value that was provided on create.
+func (u *TweetUpsertOne) UpdateRawJSON() *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateRawJSON()
+	})
+}
+
+// SetSyncedAt sets the "synced_at" field.
+func (u *TweetUpsertOne) SetSyncedAt(v time.Time) *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetSyncedAt(v)
+	})
+}
+
+// UpdateSyncedAt sets the "synced_at" field to the value that was provided on create.
+func (u *TweetUpsertOne) UpdateSyncedAt() *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateSyncedAt()
+	})
+}
+
+// SetBookmarked sets the "bookmarked" field.
+func (u *TweetUpsertOne) SetBookmarked(v tweet.Bookmarked) *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetBookmarked(v)
+	})
+}
+
+// UpdateBookmarked sets the "bookmarked" field to the value that was provided on create.
+func (u *TweetUpsertOne) UpdateBookmarked() *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateBookmarked()
+	})
+}
+
+// SetRating sets the "rating" field.
+func (u *TweetUpsertOne) SetRating(v int8) *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetRating(v)
+	})
+}
+
+// AddRating adds v to the "rating" field.
+func (u *TweetUpsertOne) AddRating(v int8) *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.AddRating(v)
+	})
+}
+
+// UpdateRating sets the "rating" field to the value that was provided on create.
+func (u *TweetUpsertOne) UpdateRating() *TweetUpsertOne {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateRating()
+	})
+}
+
+// Exec executes the query.
+func (u *TweetUpsertOne) Exec(ctx context.Context) error {
+	if len(u.create.conflict) == 0 {
+		return errors.New("ent: missing options for TweetCreate.OnConflict")
+	}
+	return u.create.Exec(ctx)
+}
+
+// ExecX is like Exec, but panics if an error occurs.
+func (u *TweetUpsertOne) ExecX(ctx context.Context) {
+	if err := u.create.Exec(ctx); err != nil {
+		panic(err)
+	}
+}
+
+// Exec executes the UPSERT query and returns the inserted/updated ID.
+func (u *TweetUpsertOne) ID(ctx context.Context) (id string, err error) {
+	if u.create.driver.Dialect() == dialect.MySQL {
+		// In case of "ON CONFLICT", there is no way to get back non-numeric ID
+		// fields from the database since MySQL does not support the RETURNING clause.
+		return id, errors.New("ent: TweetUpsertOne.ID is not supported by MySQL driver. Use TweetUpsertOne.Exec instead")
+	}
+	node, err := u.create.Save(ctx)
+	if err != nil {
+		return id, err
+	}
+	return node.ID, nil
+}
+
+// IDX is like ID, but panics if an error occurs.
+func (u *TweetUpsertOne) IDX(ctx context.Context) string {
+	id, err := u.ID(ctx)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
 // TweetCreateBulk is the builder for creating many Tweet entities in bulk.
 type TweetCreateBulk struct {
 	config
 	err      error
 	builders []*TweetCreate
+	conflict []sql.ConflictOption
 }
 
 // Save creates the Tweet entities in the database.
@@ -308,6 +695,7 @@ func (_c *TweetCreateBulk) Save(ctx context.Context) ([]*Tweet, error) {
 					_, err = mutators[i+1].Mutate(root, _c.builders[i+1].mutation)
 				} else {
 					spec := &sqlgraph.BatchCreateSpec{Nodes: specs}
+					spec.OnConflict = _c.conflict
 					// Invoke the actual operation on the latest mutation in the chain.
 					if err = sqlgraph.BatchCreate(ctx, _c.driver, spec); err != nil {
 						if sqlgraph.IsConstraintError(err) {
@@ -354,6 +742,253 @@ func (_c *TweetCreateBulk) Exec(ctx context.Context) error {
 // ExecX is like Exec, but panics if an error occurs.
 func (_c *TweetCreateBulk) ExecX(ctx context.Context) {
 	if err := _c.Exec(ctx); err != nil {
+		panic(err)
+	}
+}
+
+// OnConflict allows configuring the `ON CONFLICT` / `ON DUPLICATE KEY` clause
+// of the `INSERT` statement. For example:
+//
+//	client.Tweet.CreateBulk(builders...).
+//		OnConflict(
+//			// Update the row with the new values
+//			// the was proposed for insertion.
+//			sql.ResolveWithNewValues(),
+//		).
+//		// Override some of the fields with custom
+//		// update values.
+//		Update(func(u *ent.TweetUpsert) {
+//			SetName(v+v).
+//		}).
+//		Exec(ctx)
+func (_c *TweetCreateBulk) OnConflict(opts ...sql.ConflictOption) *TweetUpsertBulk {
+	_c.conflict = opts
+	return &TweetUpsertBulk{
+		create: _c,
+	}
+}
+
+// OnConflictColumns calls `OnConflict` and configures the columns
+// as conflict target. Using this option is equivalent to using:
+//
+//	client.Tweet.Create().
+//		OnConflict(sql.ConflictColumns(columns...)).
+//		Exec(ctx)
+func (_c *TweetCreateBulk) OnConflictColumns(columns ...string) *TweetUpsertBulk {
+	_c.conflict = append(_c.conflict, sql.ConflictColumns(columns...))
+	return &TweetUpsertBulk{
+		create: _c,
+	}
+}
+
+// TweetUpsertBulk is the builder for "upsert"-ing
+// a bulk of Tweet nodes.
+type TweetUpsertBulk struct {
+	create *TweetCreateBulk
+}
+
+// UpdateNewValues updates the mutable fields using the new values that
+// were set on create. Using this option is equivalent to using:
+//
+//	client.Tweet.Create().
+//		OnConflict(
+//			sql.ResolveWithNewValues(),
+//			sql.ResolveWith(func(u *sql.UpdateSet) {
+//				u.SetIgnore(tweet.FieldID)
+//			}),
+//		).
+//		Exec(ctx)
+func (u *TweetUpsertBulk) UpdateNewValues() *TweetUpsertBulk {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWithNewValues())
+	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
+		for _, b := range u.create.builders {
+			if _, exists := b.mutation.ID(); exists {
+				s.SetIgnore(tweet.FieldID)
+			}
+		}
+	}))
+	return u
+}
+
+// Ignore sets each column to itself in case of conflict.
+// Using this option is equivalent to using:
+//
+//	client.Tweet.Create().
+//		OnConflict(sql.ResolveWithIgnore()).
+//		Exec(ctx)
+func (u *TweetUpsertBulk) Ignore() *TweetUpsertBulk {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWithIgnore())
+	return u
+}
+
+// DoNothing configures the conflict_action to `DO NOTHING`.
+// Supported only by SQLite and PostgreSQL.
+func (u *TweetUpsertBulk) DoNothing() *TweetUpsertBulk {
+	u.create.conflict = append(u.create.conflict, sql.DoNothing())
+	return u
+}
+
+// Update allows overriding fields `UPDATE` values. See the TweetCreateBulk.OnConflict
+// documentation for more info.
+func (u *TweetUpsertBulk) Update(set func(*TweetUpsert)) *TweetUpsertBulk {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(update *sql.UpdateSet) {
+		set(&TweetUpsert{UpdateSet: update})
+	}))
+	return u
+}
+
+// SetName sets the "name" field.
+func (u *TweetUpsertBulk) SetName(v string) *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetName(v)
+	})
+}
+
+// UpdateName sets the "name" field to the value that was provided on create.
+func (u *TweetUpsertBulk) UpdateName() *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateName()
+	})
+}
+
+// SetScreenName sets the "screen_name" field.
+func (u *TweetUpsertBulk) SetScreenName(v string) *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetScreenName(v)
+	})
+}
+
+// UpdateScreenName sets the "screen_name" field to the value that was provided on create.
+func (u *TweetUpsertBulk) UpdateScreenName() *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateScreenName()
+	})
+}
+
+// SetFullText sets the "full_text" field.
+func (u *TweetUpsertBulk) SetFullText(v string) *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetFullText(v)
+	})
+}
+
+// UpdateFullText sets the "full_text" field to the value that was provided on create.
+func (u *TweetUpsertBulk) UpdateFullText() *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateFullText()
+	})
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (u *TweetUpsertBulk) SetCreatedAt(v time.Time) *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetCreatedAt(v)
+	})
+}
+
+// UpdateCreatedAt sets the "created_at" field to the value that was provided on create.
+func (u *TweetUpsertBulk) UpdateCreatedAt() *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateCreatedAt()
+	})
+}
+
+// SetPermanentURL sets the "permanent_url" field.
+func (u *TweetUpsertBulk) SetPermanentURL(v string) *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetPermanentURL(v)
+	})
+}
+
+// UpdatePermanentURL sets the "permanent_url" field to the value that was provided on create.
+func (u *TweetUpsertBulk) UpdatePermanentURL() *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdatePermanentURL()
+	})
+}
+
+// SetRawJSON sets the "raw_json" field.
+func (u *TweetUpsertBulk) SetRawJSON(v string) *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetRawJSON(v)
+	})
+}
+
+// UpdateRawJSON sets the "raw_json" field to the value that was provided on create.
+func (u *TweetUpsertBulk) UpdateRawJSON() *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateRawJSON()
+	})
+}
+
+// SetSyncedAt sets the "synced_at" field.
+func (u *TweetUpsertBulk) SetSyncedAt(v time.Time) *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetSyncedAt(v)
+	})
+}
+
+// UpdateSyncedAt sets the "synced_at" field to the value that was provided on create.
+func (u *TweetUpsertBulk) UpdateSyncedAt() *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateSyncedAt()
+	})
+}
+
+// SetBookmarked sets the "bookmarked" field.
+func (u *TweetUpsertBulk) SetBookmarked(v tweet.Bookmarked) *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetBookmarked(v)
+	})
+}
+
+// UpdateBookmarked sets the "bookmarked" field to the value that was provided on create.
+func (u *TweetUpsertBulk) UpdateBookmarked() *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateBookmarked()
+	})
+}
+
+// SetRating sets the "rating" field.
+func (u *TweetUpsertBulk) SetRating(v int8) *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.SetRating(v)
+	})
+}
+
+// AddRating adds v to the "rating" field.
+func (u *TweetUpsertBulk) AddRating(v int8) *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.AddRating(v)
+	})
+}
+
+// UpdateRating sets the "rating" field to the value that was provided on create.
+func (u *TweetUpsertBulk) UpdateRating() *TweetUpsertBulk {
+	return u.Update(func(s *TweetUpsert) {
+		s.UpdateRating()
+	})
+}
+
+// Exec executes the query.
+func (u *TweetUpsertBulk) Exec(ctx context.Context) error {
+	if u.create.err != nil {
+		return u.create.err
+	}
+	for i, b := range u.create.builders {
+		if len(b.conflict) != 0 {
+			return fmt.Errorf("ent: OnConflict was set for builder %d. Set it on the TweetCreateBulk instead", i)
+		}
+	}
+	if len(u.create.conflict) == 0 {
+		return errors.New("ent: missing options for TweetCreateBulk.OnConflict")
+	}
+	return u.create.Exec(ctx)
+}
+
+// ExecX is like Exec, but panics if an error occurs.
+func (u *TweetUpsertBulk) ExecX(ctx context.Context) {
+	if err := u.create.Exec(ctx); err != nil {
 		panic(err)
 	}
 }
