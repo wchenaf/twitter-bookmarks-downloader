@@ -16,6 +16,11 @@ import (
 
 var DB *ent.Client
 
+// InitDB decides what kind of file it is looking at before any pool or ent
+// machinery touches it: a fresh path (missing or zero-length file) first gets
+// its creation-time header properties stamped; an existing file must prove it
+// is not a GORM-era database. Only then is the pool opened and ent allowed to
+// create or verify the schema, which is idempotent on an up-to-date file.
 func InitDB(dbPath string) error {
 	fresh, err := isFreshDatabase(dbPath)
 	if err != nil {
@@ -77,10 +82,13 @@ func isFreshDatabase(dbPath string) (bool, error) {
 
 // stampCreationProperties fixes the file-level properties that SQLite freezes
 // into the header on first write and silently ignores ever after: page size
-// and auto-vacuum mode. They cannot ride the pool's _pragma DSN — modernc
-// applies page_size only when it is the sole pragma on the connection — so a
-// bare bootstrap connection sets them and VACUUM forces the header out before
-// the pool or ent ever touch the file.
+// and auto-vacuum mode. They cannot ride the pool's _pragma DSN: the other
+// pragmas there (journal_mode among them) initialize the file the moment a
+// connection opens, and once the header is written and the file is in WAL
+// mode, SQLite discards any later page_size. Observed directly: combining
+// page_size with any second DSN pragma leaves the default 4096 in place. So a
+// bare bootstrap connection sets both properties and VACUUM forces the header
+// out before the pool or ent ever touch the file.
 func stampCreationProperties(dbPath string) error {
 	boot, err := sql.Open("sqlite", "file:"+dbPath)
 	if err != nil {
@@ -104,8 +112,14 @@ func stampCreationProperties(dbPath string) error {
 // releases. Letting ent's migration touch it would silently graft new columns
 // onto the dirty old schema instead of rebuilding records from raw_json, so
 // the only safe move is to stop and point the user at the migration command.
-// The GORM-era schema is recognized by a tweets table that lacks the rating
-// column.
+// InitDB calls this before ent.NewClient and Schema.Create exist, so ent never
+// sees an old file at all.
+//
+// The fingerprint is the rating column: it exists only in the ent-era field
+// model, and no GORM-era variant of the tweets table has it, neither the
+// clean shape nor the ones carrying the stray legacy/bookmarked columns that
+// AutoMigrate left behind. One column name separates the generations without
+// a version table or a schema hash.
 //
 // The probe opens its own read-only connection: the pool's DSN carries
 // journal_mode(WAL), and merely inspecting an old file through it would

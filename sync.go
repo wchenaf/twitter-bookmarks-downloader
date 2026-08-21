@@ -27,15 +27,17 @@ Key Challenges with Twitter API:
 3.  Redundant & Inconsistent Paths: Information like `screen_name` appears in multiple places (`legacy.screen_name`,
     `core.screen_name`), but not always consistently across different tweet types (original, retweet, quote).
 
-Our Parsing Strategy (in processRawTweetResults):
+Our Parsing Strategy (envelope unwrapping below, per-tweet parsing in
+deriver.go):
 1.  Comprehensive Struct Mapping: We define a single, large struct that maps to the most common
     successful response pattern observed (User object nested in `core.user_results.result`).
     We attempt to extract data from multiple known paths within this struct (e.g., trying both `Legacy` and `Core`
     sub-fields for screen_name). This lives in deriver.go, shared with migration and rebuild.
 2.  Regex Fallback (The Safety Net): If struct parsing fails (e.g., due to a new wrapper layer or
-    unexpected nulls), we fall back to a regex search on the raw JSON string for `"screen_name":"..."`.
-    This ensures that even if the structural shape changes slightly, we can still likely identify the user
-    and save the tweet (since preserving the RawJSON allows for future re-parsing).
+    unexpected nulls), deriver.go falls back to a regex search on the raw JSON string for
+    `"screen_name":"..."`. This ensures that even if the structural shape changes slightly, we can
+    still likely identify the user and save the tweet (since preserving raw_json allows for future
+    re-parsing).
 3.  Raw Preservation: We always save the original JSON bytes into the database (`raw_json` column).
     This is crucial for data integrity and allows fixing parsing logic later without losing data.
 */
@@ -180,7 +182,7 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
 			continue
 		}
 
-		// 3. Check for duplicates in the database.
+		// Check for duplicates in the database.
 		exists, err := DB.Tweet.Query().Where(tweet.ID(d.ID)).Exist(ctx)
 		if err != nil {
 			// Skip without touching duplicateStreak: an unanswered existence

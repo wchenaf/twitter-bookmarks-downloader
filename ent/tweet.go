@@ -33,7 +33,7 @@ type Tweet struct {
 	SyncedAt time.Time `json:"synced_at,omitempty"`
 	// Whether the tweet is currently on the bookmarks list (yes), was once but no longer is (formerly), or never was (no). Written only by capture flows.
 	Bookmarked tweet.Bookmarked `json:"bookmarked,omitempty"`
-	// Human judgment following Shotwell's model: -1 = rejected, 0 = unrated, 1-5 = stars. Written only by humans, never by capture flows.
+	// Human judgment following Shotwell's model: -1 = rejected, 0 = unrated, 1-5 = stars. Capture flows seed it exactly once at creation (bookmarking is itself a cheap positive judgment, hence the lowest positive tier) and may never rewrite it afterwards; only humans change it.
 	Rating int8 `json:"rating,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the TweetQuery when eager-loading is set.

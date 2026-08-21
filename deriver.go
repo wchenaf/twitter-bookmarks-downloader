@@ -18,7 +18,7 @@ turn into database writes. It is shared by the bookmarks sync, the GORM-era
 migration, and the archive rebuild, so parsing fixes made here propagate to
 all three.
 
-Two formats exist in the wild, with zero overlap (REBUILD_NOTES 4.2):
+Two formats exist in the wild, with zero overlap (REBUILD_NOTES 2.1):
 
   - GraphQL: the tweet object intercepted from x.com's web API, recognizable
     by its `legacy` envelope. Formerly parsed in sync.go.
@@ -61,7 +61,10 @@ var screenNameRegex = regexp.MustCompile(`"screen_name"\s*:\s*"([^"]+)"`)
 func DeriveTweet(raw json.RawMessage) (*DerivedTweet, error) {
 	// The legacy format serializes the whole Go struct, so the OrderedMedia
 	// key is present in every document (as null when the tweet has no media).
-	// GraphQL documents never contain it.
+	// GraphQL documents never contain it. json.RawMessage makes the probe
+	// exact: an absent key leaves the field nil, while an explicit null still
+	// arrives as the non-nil bytes "null", so key presence, not value, is
+	// what decides the format.
 	var probe struct {
 		OrderedMedia json.RawMessage `json:"OrderedMedia"`
 	}
@@ -78,7 +81,9 @@ func DeriveTweet(raw json.RawMessage) (*DerivedTweet, error) {
 // structured DerivedTweet. This is a pure parsing function with no database
 // side effects.
 func deriveGraphQLTweet(res json.RawMessage) (*DerivedTweet, error) {
-	// 1. Parse minimal fields required for indexing using a comprehensive struct matching common patterns.
+	// 1. Parse every derived column out of the document using a
+	// comprehensive struct matching the known response shapes; this file is
+	// the raw_json-to-columns function, not a partial index.
 	var tweet struct {
 		Legacy struct {
 			IDStr            string `json:"id_str"`
@@ -209,7 +214,7 @@ func deriveLegacyTweet(raw json.RawMessage) (*DerivedTweet, error) {
 		} `json:"OrderedMedia"`
 	}
 	if err := json.Unmarshal(raw, &lt); err != nil {
-		return nil, eris.Wrap(err, "failed to unmarshal legacy json")
+		return nil, eris.Wrap(err, "failed to unmarshal legacy JSON")
 	}
 
 	if lt.ID == "" {

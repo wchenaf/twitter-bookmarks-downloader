@@ -40,7 +40,10 @@ func (Tweet) Fields() []ent.Field {
 			Max(5).
 			Comment("Human judgment following Shotwell's model: " +
 				"-1 = rejected, 0 = unrated, 1-5 = stars. " +
-				"Written only by humans, never by capture flows."),
+				"Capture flows seed it exactly once at creation " +
+				"(bookmarking is itself a cheap positive judgment, hence the " +
+				"lowest positive tier) and may never rewrite it afterwards; " +
+				"only humans change it."),
 	}
 }
 
@@ -53,9 +56,11 @@ func (Tweet) Edges() []ent.Edge {
 
 // Annotations of the Tweet.
 //
-// ent does not emit CHECK constraints for enums or Min/Max bounds on SQLite;
-// without these the DDL enforces nothing and a direct sqlite3/datasette write
-// could store values the generated Go validators would later refuse to scan.
+// ent does not emit CHECK constraints for enums or Min/Max bounds on SQLite,
+// and its generated validators run only on mutations; reads coerce whatever
+// the column holds without checking. These CHECKs are therefore the only
+// guard against a hand-written sqlite3/datasette write storing values the Go
+// side would never produce and would never notice.
 func (Tweet) Annotations() []schema.Annotation {
 	return []schema.Annotation{
 		entsql.Checks(map[string]string{
