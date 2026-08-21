@@ -17,9 +17,12 @@ import (
 type Media struct {
 	config `json:"-"`
 	// ID of the ent.
+	// Synthetic <tweet_id>-<media_id> attachment key.
 	ID string `json:"id,omitempty"`
 	// TweetID holds the value of the "tweet_id" field.
 	TweetID string `json:"tweet_id,omitempty"`
+	// Media ID assigned by Twitter; shared when a tweet reuses another tweet's attachment.
+	MediaID string `json:"media_id,omitempty"`
 	// Position within the tweet.
 	Position int `json:"position,omitempty"`
 	// URL holds the value of the "url" field.
@@ -71,7 +74,7 @@ func (*Media) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case media.FieldPosition, media.FieldRetryCount:
 			values[i] = new(sql.NullInt64)
-		case media.FieldID, media.FieldTweetID, media.FieldURL, media.FieldType:
+		case media.FieldID, media.FieldTweetID, media.FieldMediaID, media.FieldURL, media.FieldType:
 			values[i] = new(sql.NullString)
 		case media.FieldCreatedAt, media.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -101,6 +104,12 @@ func (_m *Media) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field tweet_id", values[i])
 			} else if value.Valid {
 				_m.TweetID = value.String
+			}
+		case media.FieldMediaID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field media_id", values[i])
+			} else if value.Valid {
+				_m.MediaID = value.String
 			}
 		case media.FieldPosition:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -193,6 +202,9 @@ func (_m *Media) String() string {
 	builder.WriteString(fmt.Sprintf("id=%v, ", _m.ID))
 	builder.WriteString("tweet_id=")
 	builder.WriteString(_m.TweetID)
+	builder.WriteString(", ")
+	builder.WriteString("media_id=")
+	builder.WriteString(_m.MediaID)
 	builder.WriteString(", ")
 	builder.WriteString("position=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Position))

@@ -16,27 +16,27 @@ func init() {
 	mediaFields := schema.Media{}.Fields()
 	_ = mediaFields
 	// mediaDescPosition is the schema descriptor for position field.
-	mediaDescPosition := mediaFields[2].Descriptor()
+	mediaDescPosition := mediaFields[3].Descriptor()
 	// media.DefaultPosition holds the default value on creation for the position field.
 	media.DefaultPosition = mediaDescPosition.Default.(int)
 	// mediaDescDownloaded is the schema descriptor for downloaded field.
-	mediaDescDownloaded := mediaFields[5].Descriptor()
+	mediaDescDownloaded := mediaFields[6].Descriptor()
 	// media.DefaultDownloaded holds the default value on creation for the downloaded field.
 	media.DefaultDownloaded = mediaDescDownloaded.Default.(bool)
 	// mediaDescFailed is the schema descriptor for failed field.
-	mediaDescFailed := mediaFields[6].Descriptor()
+	mediaDescFailed := mediaFields[7].Descriptor()
 	// media.DefaultFailed holds the default value on creation for the failed field.
 	media.DefaultFailed = mediaDescFailed.Default.(bool)
 	// mediaDescRetryCount is the schema descriptor for retry_count field.
-	mediaDescRetryCount := mediaFields[7].Descriptor()
+	mediaDescRetryCount := mediaFields[8].Descriptor()
 	// media.DefaultRetryCount holds the default value on creation for the retry_count field.
 	media.DefaultRetryCount = mediaDescRetryCount.Default.(int)
 	// mediaDescCreatedAt is the schema descriptor for created_at field.
-	mediaDescCreatedAt := mediaFields[8].Descriptor()
+	mediaDescCreatedAt := mediaFields[9].Descriptor()
 	// media.DefaultCreatedAt holds the default value on creation for the created_at field.
 	media.DefaultCreatedAt = mediaDescCreatedAt.Default.(func() time.Time)
 	// mediaDescUpdatedAt is the schema descriptor for updated_at field.
-	mediaDescUpdatedAt := mediaFields[9].Descriptor()
+	mediaDescUpdatedAt := mediaFields[10].Descriptor()
 	// media.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	media.DefaultUpdatedAt = mediaDescUpdatedAt.Default.(func() time.Time)
 	// media.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

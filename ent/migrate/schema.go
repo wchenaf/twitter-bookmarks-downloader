@@ -12,6 +12,7 @@ var (
 	// MediaColumns holds the columns for the "media" table.
 	MediaColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
+		{Name: "media_id", Type: field.TypeString},
 		{Name: "position", Type: field.TypeInt, Default: 0},
 		{Name: "url", Type: field.TypeString},
 		{Name: "type", Type: field.TypeString},
@@ -30,7 +31,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "media_tweets_media",
-				Columns:    []*schema.Column{MediaColumns[9]},
+				Columns:    []*schema.Column{MediaColumns[10]},
 				RefColumns: []*schema.Column{TweetsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -39,7 +40,12 @@ var (
 			{
 				Name:    "media_tweet_id",
 				Unique:  false,
-				Columns: []*schema.Column{MediaColumns[9]},
+				Columns: []*schema.Column{MediaColumns[10]},
+			},
+			{
+				Name:    "media_media_id",
+				Unique:  false,
+				Columns: []*schema.Column{MediaColumns[1]},
 			},
 		},
 	}

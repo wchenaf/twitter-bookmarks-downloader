@@ -35,6 +35,7 @@ type MediaMutation struct {
 	op             Op
 	typ            string
 	id             *string
+	media_id       *string
 	position       *int
 	addposition    *int
 	url            *string
@@ -191,6 +192,42 @@ func (m *MediaMutation) OldTweetID(ctx context.Context) (v string, err error) {
 // ResetTweetID resets all changes to the "tweet_id" field.
 func (m *MediaMutation) ResetTweetID() {
 	m.tweet = nil
+}
+
+// SetMediaID sets the "media_id" field.
+func (m *MediaMutation) SetMediaID(s string) {
+	m.media_id = &s
+}
+
+// MediaID returns the value of the "media_id" field in the mutation.
+func (m *MediaMutation) MediaID() (r string, exists bool) {
+	v := m.media_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMediaID returns the old "media_id" field's value of the Media entity.
+// If the Media object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *MediaMutation) OldMediaID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMediaID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMediaID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMediaID: %w", err)
+	}
+	return oldValue.MediaID, nil
+}
+
+// ResetMediaID resets all changes to the "media_id" field.
+func (m *MediaMutation) ResetMediaID() {
+	m.media_id = nil
 }
 
 // SetPosition sets the "position" field.
@@ -582,9 +619,12 @@ func (m *MediaMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *MediaMutation) Fields() []string {
-	fields := make([]string, 0, 9)
+	fields := make([]string, 0, 10)
 	if m.tweet != nil {
 		fields = append(fields, media.FieldTweetID)
+	}
+	if m.media_id != nil {
+		fields = append(fields, media.FieldMediaID)
 	}
 	if m.position != nil {
 		fields = append(fields, media.FieldPosition)
@@ -620,6 +660,8 @@ func (m *MediaMutation) Field(name string) (ent.Value, bool) {
 	switch name {
 	case media.FieldTweetID:
 		return m.TweetID()
+	case media.FieldMediaID:
+		return m.MediaID()
 	case media.FieldPosition:
 		return m.Position()
 	case media.FieldURL:
@@ -647,6 +689,8 @@ func (m *MediaMutation) OldField(ctx context.Context, name string) (ent.Value, e
 	switch name {
 	case media.FieldTweetID:
 		return m.OldTweetID(ctx)
+	case media.FieldMediaID:
+		return m.OldMediaID(ctx)
 	case media.FieldPosition:
 		return m.OldPosition(ctx)
 	case media.FieldURL:
@@ -678,6 +722,13 @@ func (m *MediaMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetTweetID(v)
+		return nil
+	case media.FieldMediaID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMediaID(v)
 		return nil
 	case media.FieldPosition:
 		v, ok := value.(int)
@@ -813,6 +864,9 @@ func (m *MediaMutation) ResetField(name string) error {
 	switch name {
 	case media.FieldTweetID:
 		m.ResetTweetID()
+		return nil
+	case media.FieldMediaID:
+		m.ResetMediaID()
 		return nil
 	case media.FieldPosition:
 		m.ResetPosition()

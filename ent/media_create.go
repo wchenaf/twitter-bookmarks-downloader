@@ -30,6 +30,12 @@ func (_c *MediaCreate) SetTweetID(v string) *MediaCreate {
 	return _c
 }
 
+// SetMediaID sets the "media_id" field.
+func (_c *MediaCreate) SetMediaID(v string) *MediaCreate {
+	_c.mutation.SetMediaID(v)
+	return _c
+}
+
 // SetPosition sets the "position" field.
 func (_c *MediaCreate) SetPosition(v int) *MediaCreate {
 	_c.mutation.SetPosition(v)
@@ -203,6 +209,9 @@ func (_c *MediaCreate) check() error {
 	if _, ok := _c.mutation.TweetID(); !ok {
 		return &ValidationError{Name: "tweet_id", err: errors.New(`ent: missing required field "Media.tweet_id"`)}
 	}
+	if _, ok := _c.mutation.MediaID(); !ok {
+		return &ValidationError{Name: "media_id", err: errors.New(`ent: missing required field "Media.media_id"`)}
+	}
 	if _, ok := _c.mutation.Position(); !ok {
 		return &ValidationError{Name: "position", err: errors.New(`ent: missing required field "Media.position"`)}
 	}
@@ -265,6 +274,10 @@ func (_c *MediaCreate) createSpec() (*Media, *sqlgraph.CreateSpec) {
 	if id, ok := _c.mutation.ID(); ok {
 		_node.ID = id
 		_spec.ID.Value = id
+	}
+	if value, ok := _c.mutation.MediaID(); ok {
+		_spec.SetField(media.FieldMediaID, field.TypeString, value)
+		_node.MediaID = value
 	}
 	if value, ok := _c.mutation.Position(); ok {
 		_spec.SetField(media.FieldPosition, field.TypeInt, value)
@@ -376,6 +389,18 @@ func (u *MediaUpsert) SetTweetID(v string) *MediaUpsert {
 // UpdateTweetID sets the "tweet_id" field to the value that was provided on create.
 func (u *MediaUpsert) UpdateTweetID() *MediaUpsert {
 	u.SetExcluded(media.FieldTweetID)
+	return u
+}
+
+// SetMediaID sets the "media_id" field.
+func (u *MediaUpsert) SetMediaID(v string) *MediaUpsert {
+	u.Set(media.FieldMediaID, v)
+	return u
+}
+
+// UpdateMediaID sets the "media_id" field to the value that was provided on create.
+func (u *MediaUpsert) UpdateMediaID() *MediaUpsert {
+	u.SetExcluded(media.FieldMediaID)
 	return u
 }
 
@@ -537,6 +562,20 @@ func (u *MediaUpsertOne) SetTweetID(v string) *MediaUpsertOne {
 func (u *MediaUpsertOne) UpdateTweetID() *MediaUpsertOne {
 	return u.Update(func(s *MediaUpsert) {
 		s.UpdateTweetID()
+	})
+}
+
+// SetMediaID sets the "media_id" field.
+func (u *MediaUpsertOne) SetMediaID(v string) *MediaUpsertOne {
+	return u.Update(func(s *MediaUpsert) {
+		s.SetMediaID(v)
+	})
+}
+
+// UpdateMediaID sets the "media_id" field to the value that was provided on create.
+func (u *MediaUpsertOne) UpdateMediaID() *MediaUpsertOne {
+	return u.Update(func(s *MediaUpsert) {
+		s.UpdateMediaID()
 	})
 }
 
@@ -881,6 +920,20 @@ func (u *MediaUpsertBulk) SetTweetID(v string) *MediaUpsertBulk {
 func (u *MediaUpsertBulk) UpdateTweetID() *MediaUpsertBulk {
 	return u.Update(func(s *MediaUpsert) {
 		s.UpdateTweetID()
+	})
+}
+
+// SetMediaID sets the "media_id" field.
+func (u *MediaUpsertBulk) SetMediaID(v string) *MediaUpsertBulk {
+	return u.Update(func(s *MediaUpsert) {
+		s.SetMediaID(v)
+	})
+}
+
+// UpdateMediaID sets the "media_id" field to the value that was provided on create.
+func (u *MediaUpsertBulk) UpdateMediaID() *MediaUpsertBulk {
+	return u.Update(func(s *MediaUpsert) {
+		s.UpdateMediaID()
 	})
 }
 

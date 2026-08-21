@@ -43,6 +43,20 @@ func (_u *MediaUpdate) SetNillableTweetID(v *string) *MediaUpdate {
 	return _u
 }
 
+// SetMediaID sets the "media_id" field.
+func (_u *MediaUpdate) SetMediaID(v string) *MediaUpdate {
+	_u.mutation.SetMediaID(v)
+	return _u
+}
+
+// SetNillableMediaID sets the "media_id" field if the given value is not nil.
+func (_u *MediaUpdate) SetNillableMediaID(v *string) *MediaUpdate {
+	if v != nil {
+		_u.SetMediaID(*v)
+	}
+	return _u
+}
+
 // SetPosition sets the "position" field.
 func (_u *MediaUpdate) SetPosition(v int) *MediaUpdate {
 	_u.mutation.ResetPosition()
@@ -219,6 +233,9 @@ func (_u *MediaUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			}
 		}
 	}
+	if value, ok := _u.mutation.MediaID(); ok {
+		_spec.SetField(media.FieldMediaID, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.Position(); ok {
 		_spec.SetField(media.FieldPosition, field.TypeInt, value)
 	}
@@ -305,6 +322,20 @@ func (_u *MediaUpdateOne) SetTweetID(v string) *MediaUpdateOne {
 func (_u *MediaUpdateOne) SetNillableTweetID(v *string) *MediaUpdateOne {
 	if v != nil {
 		_u.SetTweetID(*v)
+	}
+	return _u
+}
+
+// SetMediaID sets the "media_id" field.
+func (_u *MediaUpdateOne) SetMediaID(v string) *MediaUpdateOne {
+	_u.mutation.SetMediaID(v)
+	return _u
+}
+
+// SetNillableMediaID sets the "media_id" field if the given value is not nil.
+func (_u *MediaUpdateOne) SetNillableMediaID(v *string) *MediaUpdateOne {
+	if v != nil {
+		_u.SetMediaID(*v)
 	}
 	return _u
 }
@@ -514,6 +545,9 @@ func (_u *MediaUpdateOne) sqlSave(ctx context.Context) (_node *Media, err error)
 				ps[i](selector)
 			}
 		}
+	}
+	if value, ok := _u.mutation.MediaID(); ok {
+		_spec.SetField(media.FieldMediaID, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Position(); ok {
 		_spec.SetField(media.FieldPosition, field.TypeInt, value)
