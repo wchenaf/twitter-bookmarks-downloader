@@ -264,6 +264,14 @@
       // client-side navigation into or out of the bookmarks page is handled.
       if (!onSyncPage()) return this.schedule()
       if (!document.hidden) return this.schedule(AUTO_RETRY_MS)
+      // An active scroll must not be reloaded out from under: scroll state and
+      // FORCE mode live only in memory, so the run would silently restart in
+      // SMART mode, stop at the duplicate cutoff, and never reach whatever lay
+      // below the kill point.
+      if (Scroller.active) {
+        console.log('[TBD] Auto-reload deferred: scroll in progress.')
+        return this.schedule()
+      }
       window.location.reload()
     },
   }
