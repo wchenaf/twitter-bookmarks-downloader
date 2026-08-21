@@ -243,12 +243,25 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
 	duplicateStreak := 0
 	duplicateLimitReached := false
 
-	// Debug info for sparse saves
-	type savedInfo struct {
+	type belowCutoffEntry struct {
 		URL        string
 		MediaFiles []string
 	}
-	var savedDebug []savedInfo
+	// Tweets saved after the duplicate streak had already tripped the cutoff.
+	//
+	// The cutoff rests on the assumption that a run of DUPLICATE_THRESHOLD
+	// known tweets means everything below is known too, and a save past that
+	// point is that assumption failing. What follows from it depends on the
+	// caller: an ordinary sync halts on the cutoff, so whatever sits below
+	// these tweets was never fetched, whereas a forced full scroll keeps going
+	// and the same entries only mark where the assumption would have cut the
+	// run short.
+	//
+	// Whether the flag was already set is the entire distinction. A normal
+	// incremental page saves its handful of new bookmarks at the top and only
+	// then walks into the old ones, which trips the flag before the page ends
+	// and says nothing about anything being missed.
+	var belowCutoff []belowCutoffEntry
 
 	for _, res := range results {
 		tm, err := parseTweet(res)
@@ -270,32 +283,34 @@ func processRawTweetResults(results []json.RawMessage) SyncResponse {
 		}
 		duplicateStreak = 0
 
-		// Generate simulated filenames for debug
-		var mediaFilenames []string
-		mediaCount := len(tm.Media)
-		for i, m := range tm.Media {
-			if parsedURL, err := url.Parse(m.URL); err == nil {
-				mediaFilenames = append(mediaFilenames, buildFilename(tm, i, mediaCount, parsedURL))
-			}
-		}
-
 		if err := DB.Create(tm).Error; err == nil {
 			savedCount++
-			savedDebug = append(savedDebug, savedInfo{
-				URL:        tm.PermanentURL,
-				MediaFiles: mediaFilenames,
-			})
+			if duplicateLimitReached {
+				// Filenames the worker is about to derive, so the report names
+				// the files on disk rather than URLs nobody can grep for.
+				var mediaFilenames []string
+				mediaCount := len(tm.Media)
+				for i, m := range tm.Media {
+					if parsedURL, err := url.Parse(m.URL); err == nil {
+						mediaFilenames = append(mediaFilenames, buildFilename(tm, i, mediaCount, parsedURL))
+					}
+				}
+				belowCutoff = append(belowCutoff, belowCutoffEntry{
+					URL:        tm.PermanentURL,
+					MediaFiles: mediaFilenames,
+				})
+			}
 		}
 	}
 
 	PrintInfoF("Batch processing complete: %d new tweets saved. (Duplicate limit reached: %v)", savedCount, duplicateLimitReached)
 
-	// Debug: Identify why we are saving items after hitting duplicate limit
-	if duplicateLimitReached && savedCount > 0 {
-		for _, info := range savedDebug {
-			PrintWarningF("  [Sparse Save] URL: %s", info.URL)
+	if len(belowCutoff) > 0 {
+		PrintWarningF("%d tweets were saved below the duplicate cutoff; unless this was a forced full scroll, the run stopped there and left the rest behind:", len(belowCutoff))
+		for _, info := range belowCutoff {
+			PrintWarningF("  [Below Cutoff] URL: %s", info.URL)
 			for _, mf := range info.MediaFiles {
-				PrintWarningF("                Media: %s", mf)
+				PrintWarningF("                 Media: %s", mf)
 			}
 		}
 	}
