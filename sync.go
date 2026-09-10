@@ -37,6 +37,16 @@ Our Parsing Strategy (in processRawTweetResults):
     This is crucial for data integrity and allows fixing parsing logic later without losing data.
 */
 
+// rawTweetEntry pairs a normalized tweet object with the bookmark timeline
+// entry's sortIndex — the ordering value x.com itself uses for bookmarks (a
+// *bookmark's* position, not the tweet's publish time). Everything except the
+// sidecar in bookmark_meta.go ignores it.
+type rawTweetEntry struct {
+	Result    json.RawMessage
+	SortIndex string
+	EntryID   string
+}
+
 const DUPLICATE_THRESHOLD = 5 // Stop syncing if we encounter this many existing tweets in a row
 
 // screenNameRegex is our last line of defense to extract the username if JSON structural parsing fails.
@@ -45,7 +55,38 @@ var screenNameRegex = regexp.MustCompile(`"screen_name"\s*:\s*"([^"]+)"`)
 // ProcessSyncRaw acts as the entry point. It unwraps the top-level GraphQL envelope
 // to find the actual list of tweet entries.
 func ProcessSyncRaw(fullJSON json.RawMessage) SyncResponse {
-	// 1. Unwrap the outer GraphQL envelope to access the timeline
+	raw, foundTypes, err := parseTimelineEntries(fullJSON)
+	if err != nil {
+		PrintError(err)
+		return SyncResponse{Success: false, Message: "JSON unmarshal error"}
+	}
+
+	if len(raw) == 0 {
+		PrintWarningF("No tweets extracted. Found instruction types: %v", foundTypes)
+	} else {
+		PrintInfoF("Extracted %d tweets from raw GraphQL response", len(raw))
+	}
+
+	cleanTweets := normalizeTweetEntries(raw)
+
+	// Sidecar first, and ahead of the duplicate cutoff inside
+	// processRawTweetResults: an all-duplicate batch (the periodic auto reload)
+	// still refreshes the top of the timeline.
+	recordBookmarkMeta(cleanTweets)
+
+	results := make([]json.RawMessage, 0, len(cleanTweets))
+	for _, e := range cleanTweets {
+		results = append(results, e.Result)
+	}
+	return processRawTweetResults(results)
+}
+
+// parseTimelineEntries walks the BookmarkTimeline instructions and returns each
+// tweet object still paired with its entry-level sortIndex (see
+// bookmark_meta.go) plus the instruction types seen, for diagnostics.
+//
+// Pure: no IO, no DB — the envelope shape is the only thing it knows.
+func parseTimelineEntries(fullJSON json.RawMessage) ([]rawTweetEntry, []string, error) {
 	var resp struct {
 		Data struct {
 			BookmarkTimeline struct {
@@ -60,61 +101,69 @@ func ProcessSyncRaw(fullJSON json.RawMessage) SyncResponse {
 	}
 
 	if err := json.Unmarshal(fullJSON, &resp); err != nil {
-		PrintError(err)
-		return SyncResponse{Success: false, Message: "JSON unmarshal error"}
+		return nil, nil, err
 	}
 
-	// 2. Iterate through instructions to find "TimelineAddEntries".
-	// Twitter sometimes splits data across different instruction types, but "AddEntries" is the primary one for lists.
-	var rawTweets []json.RawMessage
+	// Twitter sometimes splits data across different instruction types, but
+	// "AddEntries" is the primary one for lists.
+	var rawTweets []rawTweetEntry
 	var foundTypes []string
 
 	for _, inst := range resp.Data.BookmarkTimeline.Timeline.Instructions {
 		foundTypes = append(foundTypes, inst.Type)
-		if inst.Type == "TimelineAddEntries" {
-			for _, entryMsg := range inst.Entries {
-				// Each entry might be a Tweet, a Promoted Tweet, or a Cursor.
-				// We dig into content.itemContent.tweet_results.result to find the actual tweet data.
-				var entry struct {
-					Content struct {
-						ItemContent struct {
-							TweetResults struct {
-								Result json.RawMessage `json:"result"`
-							} `json:"tweet_results"`
-						} `json:"itemContent"`
-					} `json:"content"`
-				}
-				if err := json.Unmarshal(entryMsg, &entry); err == nil && entry.Content.ItemContent.TweetResults.Result != nil {
-					rawTweets = append(rawTweets, entry.Content.ItemContent.TweetResults.Result)
-				}
+		if inst.Type != "TimelineAddEntries" {
+			continue
+		}
+		for _, entryMsg := range inst.Entries {
+			// Each entry might be a Tweet, a Promoted Tweet, or a Cursor.
+			// We dig into content.itemContent.tweet_results.result to find the
+			// actual tweet data; sortIndex rides alongside it and is the
+			// timeline's own ordering value, captured here because nothing
+			// further down can see it again.
+			var entry struct {
+				SortIndex string `json:"sortIndex"`
+				EntryID   string `json:"entryId"`
+				Content   struct {
+					ItemContent struct {
+						TweetResults struct {
+							Result json.RawMessage `json:"result"`
+						} `json:"tweet_results"`
+					} `json:"itemContent"`
+				} `json:"content"`
+			}
+			if err := json.Unmarshal(entryMsg, &entry); err == nil && entry.Content.ItemContent.TweetResults.Result != nil {
+				rawTweets = append(rawTweets, rawTweetEntry{
+					Result:    entry.Content.ItemContent.TweetResults.Result,
+					SortIndex: entry.SortIndex,
+					EntryID:   entry.EntryID,
+				})
 			}
 		}
 	}
+	return rawTweets, foundTypes, nil
+}
 
-	if len(rawTweets) == 0 {
-		PrintWarningF("No tweets extracted. Found instruction types: %v", foundTypes)
-	} else {
-		PrintInfoF("Extracted %d tweets from raw GraphQL response", len(rawTweets))
-	}
-
-	// 3. Normalize the tweet objects.
-	// Sometimes the result IS the tweet (typename="Tweet"), sometimes it WRAPS the tweet (typename="TweetWithVisibilityResults").
-	var cleanTweets []json.RawMessage
+// normalizeTweetEntries unwraps the tweet objects: sometimes the result IS the
+// tweet (typename="Tweet"), sometimes it WRAPS it (typename=
+// "TweetWithVisibilityResults"). Cursor and promoted entries fall out.
+func normalizeTweetEntries(rawTweets []rawTweetEntry) []rawTweetEntry {
+	var cleanTweets []rawTweetEntry
 	for _, rt := range rawTweets {
 		var wrap struct {
 			Typename string          `json:"__typename"`
 			Tweet    json.RawMessage `json:"tweet"`
 		}
-		if err := json.Unmarshal(rt, &wrap); err == nil {
-			if wrap.Typename == "Tweet" {
-				cleanTweets = append(cleanTweets, rt)
-			} else if wrap.Tweet != nil {
-				cleanTweets = append(cleanTweets, wrap.Tweet)
-			}
+		if err := json.Unmarshal(rt.Result, &wrap); err != nil {
+			continue
+		}
+		if wrap.Typename == "Tweet" {
+			cleanTweets = append(cleanTweets, rt)
+		} else if wrap.Tweet != nil {
+			rt.Result = wrap.Tweet
+			cleanTweets = append(cleanTweets, rt)
 		}
 	}
-
-	return processRawTweetResults(cleanTweets)
+	return cleanTweets
 }
 
 // parseTweet converts a raw Twitter GraphQL JSON message into a structured TweetModel.
@@ -199,7 +248,7 @@ func parseTweet(res json.RawMessage) (*TweetModel, error) {
 	// Note: We store the raw JSON payload to allow for future re-processing or data recovery.
 	tm := &TweetModel{
 		ID:           tweetID,
-		FullText:     tweet.Legacy.FullText,
+		FullText:     fullestText(res, tweet.Legacy.FullText),
 		Name:         name,
 		ScreenName:   screenName,
 		CreatedAt:    createdAt,
