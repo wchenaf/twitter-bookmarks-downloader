@@ -12,6 +12,10 @@ type SyncResponse struct {
 	Message               string `json:"message"`
 	DuplicateLimitReached bool   `json:"duplicate_limit_reached"`
 	SavedCount            int    `json:"saved_count"`
+	// EmptyPage reports a payload that carried timeline entries but no tweet:
+	// x.com's answer once a scroll walks past the last bookmark. The
+	// client uses it to end a run instead of retrying forever.
+	EmptyPage             bool   `json:"empty_page"`
 }
 
 func StartServer(addr string) error {

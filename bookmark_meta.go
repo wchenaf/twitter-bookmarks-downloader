@@ -205,7 +205,10 @@ func mergeBookmarkMeta(old, next BookmarkMeta) BookmarkMeta {
 	if out.CreatedAt == "" {
 		out.CreatedAt = old.CreatedAt
 	}
-	if out.CapturedAt == "" {
+	if old.CapturedAt != "" {
+		// First sighting wins. captured_at records when the row was first
+		// written; letting it track the latest POST would make every repeat sync
+		// look like a change and append the same tweet over and over.
 		out.CapturedAt = old.CapturedAt
 	}
 	return out

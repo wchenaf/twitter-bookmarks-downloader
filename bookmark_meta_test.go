@@ -163,6 +163,17 @@ func TestRecordBookmarkMetaDedupesAndKeepsBiggerSortIndex(t *testing.T) {
 	assert.Equal(t, "200", got.SortIndex)
 }
 
+func TestMergeBookmarkMetaKeepsFirstCaptureTime(t *testing.T) {
+	// captured_at 一旦跟着最新 POST 走，每次重复同步都会被判成"有变化"而重复
+	// 追加同一行（sidecar 会以每 30 分钟 20 行的速度无限长胖）。
+	old := BookmarkMeta{TweetID: "1", SortIndex: "100", Text: "正文",
+		CapturedAt: "2026-09-11T00:00:00Z"}
+	next := BookmarkMeta{TweetID: "1", SortIndex: "100", Text: "正文",
+		CapturedAt: "2026-09-11T05:00:00Z"}
+	assert.Equal(t, old, mergeBookmarkMeta(old, next),
+		"no field changed → the row must be considered unchanged")
+}
+
 func TestRecordBookmarkMetaRedumpsAfterFileDeleted(t *testing.T) {
 	resetMetaForTest(t)
 	recordBookmarkMeta([]rawTweetEntry{
@@ -209,18 +220,45 @@ func TestParseTimelineEntriesKeepsSortIndexPaired(t *testing.T) {
 {"type":"TimelineCursor","entries":[]},
 {"type":"TimelineAddEntries","entries":[
  {"entryId":"tweet-1","sortIndex":"900","content":{"itemContent":{"tweet_results":{"result":{"__typename":"Tweet","legacy":{"id_str":"1"}}}}}},
- {"entryId":"cursor-bottom-9","sortIndex":"1000","content":{"itemContent":{"cursorType":"Bottom"}}}
+ {"entryId":"cursor-bottom-9","sortIndex":"1000","content":{"entryType":"TimelineTimelineCursor","cursorType":"Bottom","value":"abc"}}
 ]}]}}}}`
-	raw, types, err := parseTimelineEntries(json.RawMessage(envelope))
+	page, err := parseTimelineEntries(json.RawMessage(envelope))
 	assert.NoError(t, err)
-	assert.Equal(t, []string{"TimelineCursor", "TimelineAddEntries"}, types)
-	assert.Len(t, raw, 1, "cursor entry carries no tweet_results.result")
-	assert.Equal(t, "900", raw[0].SortIndex)
-	assert.Equal(t, "tweet-1", raw[0].EntryID)
+	assert.Equal(t, []string{"TimelineCursor", "TimelineAddEntries"}, page.Types)
+	assert.Equal(t, 2, page.Entries, "every entry counted, cursor included")
+	assert.Equal(t, 1, page.Cursors)
+	assert.Len(t, page.Tweets, 1, "cursor entry carries no tweet_results.result")
+	assert.Equal(t, "900", page.Tweets[0].SortIndex)
+	assert.Equal(t, "tweet-1", page.Tweets[0].EntryID)
+	assert.False(t, page.endOfTimeline(), "a page carrying a tweet is never the end")
+}
+
+func TestParseTimelineEntriesCursorOnlyPageIsEndOfTimeline(t *testing.T) {
+	// x.com's answer past the last bookmark: entries, none a tweet, one cursor.
+	envelope := `{"data":{"bookmark_timeline_v2":{"timeline":{"instructions":[
+{"type":"TimelineAddEntries","entries":[
+ {"entryId":"cursor-bottom-42","sortIndex":"1000","content":{"entryType":"TimelineTimelineCursor","cursorType":"Bottom","value":"xyz"}}
+]}]}}}}`
+	page, err := parseTimelineEntries(json.RawMessage(envelope))
+	assert.NoError(t, err)
+	assert.Empty(t, page.Tweets)
+	assert.Equal(t, 1, page.Cursors)
+	assert.True(t, page.endOfTimeline())
+}
+
+func TestParseTimelineEntriesBarePayloadIsNotEndOfTimeline(t *testing.T) {
+	// 没有 entries（限流/后端异常的常见形态）绝不能被当成"到底了"——
+	// 客户端要把它留给失败计数路径。
+	page, err := parseTimelineEntries(json.RawMessage(
+		`{"data":{"bookmark_timeline_v2":{"timeline":{"instructions":[]}}}}`))
+	assert.NoError(t, err)
+	assert.Empty(t, page.Tweets)
+	assert.Equal(t, 0, page.Entries)
+	assert.False(t, page.endOfTimeline())
 }
 
 func TestParseTimelineEntriesRejectsBadJSON(t *testing.T) {
-	_, _, err := parseTimelineEntries(json.RawMessage("{not json"))
+	_, err := parseTimelineEntries(json.RawMessage("{not json"))
 	assert.Error(t, err)
 }
 

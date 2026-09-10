@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter Bookmarks Sync to Local
 // @namespace    http://tampermonkey.net/
-// @version      0.3
+// @version      0.4
 // @description  Intercept XHR to sync bookmarks, with auto-scroll and unattended periodic sync.
 // @author       Gemini
 // @match        https://x.com/*
@@ -22,6 +22,12 @@
   const AUTO_RETRY_MS = 5 * 60 * 1000
   // Consecutive failures at which a run gives up.
   const MAX_SYNC_FAILURES = 5
+  // Consecutive end-of-timeline pages at which a scroll is done. Past the last
+  // bookmark x.com answers with a cursor-only page and would keep answering the
+  // same way for every further request, so this is a real terminus rather than
+  // a failure to retry: one page proves nothing (a hiccup mid-list looks the
+  // same), three in a row does.
+  const EMPTY_PAGE_LIMIT = 3
   // A POST that never completes counts as no failure at all, so a backend that
   // accepts the connection and then stalls would leave a scroll running with
   // nothing to bound it. The handler only touches the local database, media
@@ -35,7 +41,7 @@
 
   const onSyncPage = () => SYNC_PATHS.some((p) => window.location.pathname.includes(p))
 
-  console.log('[TBD v0.3] Terminal UI Edition loaded.')
+  console.log('[TBD v0.4] Terminal UI Edition loaded.')
 
   const UI = {
     el: null,
@@ -187,8 +193,9 @@
       if (this.active) return
       // A fresh run gets a fresh failure budget, so pressing RUN after fixing
       // the backend behaves like a first attempt rather than inheriting an
-      // already-exhausted count.
+      // already-exhausted count. Same for the end-of-timeline counter.
       SyncFailures.reset()
+      EmptyPages.reset()
       this.active = true
       UI.setScrolling(true)
       this.loop()
@@ -238,6 +245,31 @@
       // watching.
       console.error(`[TBD] ${label} x${this.count}, run aborted.`)
       UI.updateStatus(`ABORTED: ${label}`, '#ff0033')
+    },
+  }
+
+  // Past the last bookmark the backend reports empty_page. That is a normal end
+  // of run, not a failure, so it gets its own counter and its own label: fewer
+  // requests than the failure path (three pages, not five) and END instead of
+  // ABORTED. Green is deliberate — updateStatus holds anything green on screen,
+  // so the panel keeps saying END until the next RUN rather than reverting to
+  // the idle text after two seconds.
+  const EmptyPages = {
+    count: 0,
+
+    reset() {
+      this.count = 0
+    },
+
+    note() {
+      this.count++
+      if (this.count < EMPTY_PAGE_LIMIT) {
+        UI.updateStatus(`END? ${this.count}/${EMPTY_PAGE_LIMIT}`, '#0ff')
+        return
+      }
+      Scroller.stop()
+      console.log(`[TBD] End of bookmark timeline (${this.count} empty pages).`)
+      UI.updateStatus('END', '#0f0')
     },
   }
 
@@ -311,31 +343,43 @@
             onload: function (response) {
               try {
                 const res = JSON.parse(response.responseText)
-                if (res.duplicate_limit_reached) {
+                if (res.empty_page) {
+                  // Timeline entries came back and none of them was a tweet:
+                  // the scroll has walked past the last bookmark. The backend
+                  // only reports this when a cursor came with it, so a rate
+                  // limit still lands in the NO DATA branch below.
+                  EmptyPages.note()
                   SyncFailures.reset()
-                  if (!UI.isForceMode()) {
-                    Scroller.stop()
-                    UI.updateStatus('LIMIT REACHED', '#ff0033')
-                  } else {
-                    // Silent continuation in Force Mode
-                    console.log(`[TBD] Limit hit (Force). Saved: ${res.saved_count}`)
-                  }
-                } else if (res.saved_count > 0) {
-                  SyncFailures.reset()
-                  UI.updateStatus(`SAVED:${res.saved_count}`, '#0f0')
-                  // The backend did not find enough duplicates, so this page was
-                  // largely new and more probably waits below it. A reload would
-                  // only fetch the same first page again, so paginate by
-                  // scrolling. Idempotent while a run is already in progress.
-                  Scroller.start()
                 } else {
-                  // Neither new tweets nor the duplicate signal means the
-                  // response carried no usable timeline, which is what x.com
-                  // returns once it starts rate limiting a scroll. Reading that
-                  // as "page was new, keep going" would answer a rate limit with
-                  // more requests, so it spends the same budget as an
-                  // unreachable backend rather than resetting it.
-                  SyncFailures.note('NO DATA')
+                  // Any page that carried a tweet proves the list continues, so
+                  // the end-of-timeline streak is over whichever branch we take.
+                  EmptyPages.reset()
+                  if (res.duplicate_limit_reached) {
+                    SyncFailures.reset()
+                    if (!UI.isForceMode()) {
+                      Scroller.stop()
+                      UI.updateStatus('LIMIT REACHED', '#ff0033')
+                    } else {
+                      // Silent continuation in Force Mode
+                      console.log(`[TBD] Limit hit (Force). Saved: ${res.saved_count}`)
+                    }
+                  } else if (res.saved_count > 0) {
+                    SyncFailures.reset()
+                    UI.updateStatus(`SAVED:${res.saved_count}`, '#0f0')
+                    // The backend did not find enough duplicates, so this page was
+                    // largely new and more probably waits below it. A reload would
+                    // only fetch the same first page again, so paginate by
+                    // scrolling. Idempotent while a run is already in progress.
+                    Scroller.start()
+                  } else {
+                    // Neither new tweets nor the duplicate signal means the
+                    // response carried no usable timeline, which is what x.com
+                    // returns once it starts rate limiting a scroll. Reading that
+                    // as "page was new, keep going" would answer a rate limit with
+                    // more requests, so it spends the same budget as an
+                    // unreachable backend rather than resetting it.
+                    SyncFailures.note('NO DATA')
+                  }
                 }
               } catch (e) {
                 SyncFailures.note('BACKEND ERR')

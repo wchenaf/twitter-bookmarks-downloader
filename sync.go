@@ -55,19 +55,28 @@ var screenNameRegex = regexp.MustCompile(`"screen_name"\s*:\s*"([^"]+)"`)
 // ProcessSyncRaw acts as the entry point. It unwraps the top-level GraphQL envelope
 // to find the actual list of tweet entries.
 func ProcessSyncRaw(fullJSON json.RawMessage) SyncResponse {
-	raw, foundTypes, err := parseTimelineEntries(fullJSON)
+	page, err := parseTimelineEntries(fullJSON)
 	if err != nil {
 		PrintError(err)
 		return SyncResponse{Success: false, Message: "JSON unmarshal error"}
 	}
 
-	if len(raw) == 0 {
-		PrintWarningF("No tweets extracted. Found instruction types: %v", foundTypes)
+	if len(page.Tweets) == 0 {
+		if page.Cursors > 0 {
+			// A page of cursors and nothing else is x.com's answer once a scroll
+			// walks past the last bookmark. Informational: the client ends the
+			// run on empty_page, and a scroll that kept asking would get this
+			// same page back forever.
+			PrintInfoF("End of timeline (%d entries, %d cursors, no tweets)",
+				page.Entries, page.Cursors)
+		} else {
+			PrintWarningF("No tweets extracted. Found instruction types: %v", page.Types)
+		}
 	} else {
-		PrintInfoF("Extracted %d tweets from raw GraphQL response", len(raw))
+		PrintInfoF("Extracted %d tweets from raw GraphQL response", len(page.Tweets))
 	}
 
-	cleanTweets := normalizeTweetEntries(raw)
+	cleanTweets := normalizeTweetEntries(page.Tweets)
 
 	// Sidecar first, and ahead of the duplicate cutoff inside
 	// processRawTweetResults: an all-duplicate batch (the periodic auto reload)
@@ -78,15 +87,36 @@ func ProcessSyncRaw(fullJSON json.RawMessage) SyncResponse {
 	for _, e := range cleanTweets {
 		results = append(results, e.Result)
 	}
-	return processRawTweetResults(results)
+	resp := processRawTweetResults(results)
+	// End of timeline: entries came back, none of them a tweet, at least one of
+	// them a cursor. Requiring the cursor keeps a bare payload — which is what a
+	// rate limit looks like — on the client's failure path instead.
+	resp.EmptyPage = page.endOfTimeline()
+	return resp
 }
 
-// parseTimelineEntries walks the BookmarkTimeline instructions and returns each
-// tweet object still paired with its entry-level sortIndex (see
-// bookmark_meta.go) plus the instruction types seen, for diagnostics.
+// timelinePage is one parsed sync payload.
+type timelinePage struct {
+	Tweets  []rawTweetEntry // tweet objects, each paired with its entry sortIndex
+	Types   []string        // instruction types seen (diagnostics)
+	Entries int             // raw timeline entries seen, cursors included
+	Cursors int             // of those, the cursor entries
+}
+
+// endOfTimeline reports x.com's answer once a scroll walks past the last
+// bookmark: timeline entries came back, none of them a tweet, at least one a
+// cursor. A bare payload (no entries, or entries that are not cursors) is what
+// a rate limit looks like, so it stays on the failure path instead.
+func (p timelinePage) endOfTimeline() bool {
+	return len(p.Tweets) == 0 && p.Cursors > 0
+}
+
+// parseTimelineEntries walks the BookmarkTimeline instructions and returns every
+// tweet object still paired with its entry-level sortIndex (see bookmark_meta.go),
+// alongside what else the payload carried.
 //
 // Pure: no IO, no DB — the envelope shape is the only thing it knows.
-func parseTimelineEntries(fullJSON json.RawMessage) ([]rawTweetEntry, []string, error) {
+func parseTimelineEntries(fullJSON json.RawMessage) (timelinePage, error) {
 	var resp struct {
 		Data struct {
 			BookmarkTimeline struct {
@@ -101,20 +131,20 @@ func parseTimelineEntries(fullJSON json.RawMessage) ([]rawTweetEntry, []string, 
 	}
 
 	if err := json.Unmarshal(fullJSON, &resp); err != nil {
-		return nil, nil, err
+		return timelinePage{}, err
 	}
 
 	// Twitter sometimes splits data across different instruction types, but
 	// "AddEntries" is the primary one for lists.
-	var rawTweets []rawTweetEntry
-	var foundTypes []string
+	page := timelinePage{}
 
 	for _, inst := range resp.Data.BookmarkTimeline.Timeline.Instructions {
-		foundTypes = append(foundTypes, inst.Type)
+		page.Types = append(page.Types, inst.Type)
 		if inst.Type != "TimelineAddEntries" {
 			continue
 		}
 		for _, entryMsg := range inst.Entries {
+			page.Entries++
 			// Each entry might be a Tweet, a Promoted Tweet, or a Cursor.
 			// We dig into content.itemContent.tweet_results.result to find the
 			// actual tweet data; sortIndex rides alongside it and is the
@@ -124,6 +154,7 @@ func parseTimelineEntries(fullJSON json.RawMessage) ([]rawTweetEntry, []string, 
 				SortIndex string `json:"sortIndex"`
 				EntryID   string `json:"entryId"`
 				Content   struct {
+					CursorType  string `json:"cursorType"`
 					ItemContent struct {
 						TweetResults struct {
 							Result json.RawMessage `json:"result"`
@@ -131,8 +162,14 @@ func parseTimelineEntries(fullJSON json.RawMessage) ([]rawTweetEntry, []string, 
 					} `json:"itemContent"`
 				} `json:"content"`
 			}
-			if err := json.Unmarshal(entryMsg, &entry); err == nil && entry.Content.ItemContent.TweetResults.Result != nil {
-				rawTweets = append(rawTweets, rawTweetEntry{
+			if err := json.Unmarshal(entryMsg, &entry); err != nil {
+				continue
+			}
+			if entry.Content.CursorType != "" {
+				page.Cursors++
+			}
+			if entry.Content.ItemContent.TweetResults.Result != nil {
+				page.Tweets = append(page.Tweets, rawTweetEntry{
 					Result:    entry.Content.ItemContent.TweetResults.Result,
 					SortIndex: entry.SortIndex,
 					EntryID:   entry.EntryID,
@@ -140,7 +177,7 @@ func parseTimelineEntries(fullJSON json.RawMessage) ([]rawTweetEntry, []string, 
 			}
 		}
 	}
-	return rawTweets, foundTypes, nil
+	return page, nil
 }
 
 // normalizeTweetEntries unwraps the tweet objects: sometimes the result IS the
