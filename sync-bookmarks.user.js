@@ -4,6 +4,9 @@
 // @version      0.4
 // @description  Intercept XHR to sync bookmarks, with auto-scroll and unattended periodic sync.
 // @author       Gemini
+// @downloadURL  https://gist.githubusercontent.com/wchenaf/0e2d69dbb0f044f457f43baefdca202a/raw/sync-bookmarks.user.js
+// @updateURL    https://gist.githubusercontent.com/wchenaf/0e2d69dbb0f044f457f43baefdca202a/raw/sync-bookmarks.user.js
+// @homepageURL  https://gist.github.com/wchenaf/0e2d69dbb0f044f457f43baefdca202a
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @run-at       document-start
