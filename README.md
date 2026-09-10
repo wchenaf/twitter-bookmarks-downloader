@@ -38,6 +38,23 @@ It runs a local server and uses a browser userscript to intercept the _exact sam
 1.  **Frontend (Userscript)**: Hooks into `XMLHttpRequest` on `x.com` to capture data silently.
 2.  **Backend (Go)**: A lightweight daemon (`:41008`) that parses data, manages the SQLite database, and handles heavy-duty media downloads.
 
+### Bookmark metadata sidecar (`<MediaDir>/bookmark_meta.jsonl`)
+
+Media filenames carry the tweet's **publish** time, which is not the order x.com
+shows bookmarks in: the timeline is ordered by each entry's `sortIndex` (the
+bookmark's own position). That value exists only in the GraphQL envelope, next
+to the tweet it wraps, so it is kept here — along with the full post text, since
+`legacy.full_text` is truncated for long posts.
+
+One JSON object per line:
+`{tweet_id, sort_index, screen_name, text, created_at, captured_at}`. Append-only:
+a row is written only when a tweet is new or its `sortIndex` grows, so repeated
+syncs of the same page add nothing. Deleted by hand? It is rewritten from memory
+on the next sync batch.
+
+⛔ The filename and the field names are a contract with the consumer
+(`tg-hgreport-v2`, `src/hgreport/media/xmeta.py`) — change both sides together.
+
 ## Getting Started
 
 ### 1. Backend

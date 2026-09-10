@@ -43,6 +43,21 @@
 1.  **前端 (Userscript)**：运行在 `x.com` 页面上（通过 Tampermonkey）。它 Hook 了浏览器的 `XMLHttpRequest`，静默捕获书签数据，并通过 `GM_xmlhttpRequest` 将其推送到本地服务器。
 2.  **后端 (Go)**：一个轻量级的 HTTP 守护进程 (`:41008`)。它负责解析复杂的 GraphQL 响应，管理 SQLite 数据库，并处理繁重的媒体下载任务。
 
+### 书签元数据侧车（`<MediaDir>/bookmark_meta.jsonl`）
+
+媒体文件名里的时间戳是推文的**发布时间**，而 x.com 书签页是按每条 entry 的
+`sortIndex`（书签自身的位置）排序的 —— 两者顺序并不相同。`sortIndex` 只存在于
+GraphQL 信封里、紧挨着被包住的推文对象，所以在这里单独留一份；同时带上完整正文
+（长推文的 `legacy.full_text` 是截断版）。
+
+一行一条 JSON：
+`{tweet_id, sort_index, screen_name, text, created_at, captured_at}`。
+append-only —— 只在「新推文」或「`sortIndex` 变大」时追加，同一页反复同步不会长胖；
+文件被手工删掉会在下个同步批次用内存里的历史重灌。
+
+⛔ 文件名与字段名是与消费端（`tg-hgreport-v2` 的 `src/hgreport/media/xmeta.py`）
+的契约，两边必须一起改。
+
 ## 安装指南
 
 ### 1. 后端 (Go)
