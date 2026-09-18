@@ -17,7 +17,7 @@ This project (TBD) uses a hybrid architecture to safely and reliably sync Twitte
 
 ### Data Flow
 
-1.  User scrolls the Twitter Bookmarks page.
+1.  The Twitter Bookmarks page is loaded or scrolled. A **page load (or reload)** is what brings new bookmarks in — they arrive at the top of the timeline, while scrolling only walks further back.
 2.  **Userscript** intercepts the native `XMLHttpRequest`.
 3.  Userscript detects GraphQL responses containing "Bookmarks".
 4.  Userscript forwards the **raw response text** (string) to `http://localhost:41008/api/sync-raw` using `GM_xmlhttpRequest` (to bypass CSP).

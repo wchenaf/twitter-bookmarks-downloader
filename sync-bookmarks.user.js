@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter Bookmarks Sync to Local
 // @namespace    http://tampermonkey.net/
-// @version      0.4
+// @version      0.5
 // @description  Intercept XHR to sync bookmarks, with auto-scroll and unattended periodic sync.
 // @author       Gemini
 // @downloadURL  https://gist.githubusercontent.com/wchenaf/0e2d69dbb0f044f457f43baefdca202a/raw/sync-bookmarks.user.js
@@ -44,7 +44,7 @@
 
   const onSyncPage = () => SYNC_PATHS.some((p) => window.location.pathname.includes(p))
 
-  console.log('[TBD v0.4] Terminal UI Edition loaded.')
+  console.log('[TBD v0.5] Terminal UI Edition loaded.')
 
   const UI = {
     el: null,
@@ -183,13 +183,56 @@
     },
   }
 
+  // RUN used to do nothing but walk the timeline downwards, which is the one
+  // direction a new bookmark cannot be in: entries arrive at the top of the
+  // timeline and scrolling only ever walks further back. So RUN reloads, and
+  // the reload's own Bookmarks query is what brings the top page in. The scroll
+  // then resumes on the far side of it, which keeps Force Mode's historical
+  // sweep reachable from the same button instead of needing a second one.
+  //
+  // That intent has to outlive the page it was set on: whether to keep
+  // scrolling is not known until the first batch has answered, and by then the
+  // page that pressed RUN is gone. sessionStorage carries it across the reload,
+  // and no further — an intent belongs to the tab that set it, and one that
+  // survived into tomorrow's tab would start a scroll nobody asked for.
+  const RESUME_SCROLL_KEY = 'tbd_resume_scroll'
+
+  const RunIntent = {
+    set() {
+      try {
+        sessionStorage.setItem(RESUME_SCROLL_KEY, '1')
+      } catch (e) {
+        // Storage unavailable (private mode, site data blocked). The reload
+        // still syncs; all that is lost is the scroll that would follow it.
+      }
+    },
+
+    take() {
+      try {
+        const set = sessionStorage.getItem(RESUME_SCROLL_KEY)
+        if (set) sessionStorage.removeItem(RESUME_SCROLL_KEY)
+        return !!set
+      } catch (e) {
+        return false
+      }
+    },
+  }
+
   const Scroller = {
     active: false,
     timer: null,
 
     toggle() {
-      if (this.active) this.stop()
-      else this.start()
+      if (this.active) {
+        this.stop()
+        return
+      }
+      // Off the bookmarks page a reload would land somewhere the backend never
+      // hears from. The panel is hidden there, so this is a belt rather than a
+      // path anyone walks.
+      if (!onSyncPage()) return
+      RunIntent.set()
+      window.location.reload()
     },
 
     start() {
@@ -213,7 +256,10 @@
 
     loop() {
       if (!this.active) return
-      window.scrollTo(0, document.body.scrollHeight)
+      // @run-at document-start: a run resumed by RunIntent can tick before there
+      // is a body to measure. Skipping the tick costs one interval; reading
+      // scrollHeight off a null body would take the whole script down with it.
+      if (document.body) window.scrollTo(0, document.body.scrollHeight)
       this.timer = setTimeout(() => {
         this.loop()
       }, 5000)
@@ -405,5 +451,10 @@
   }
 
   UI.init()
+  // A RUN that asked to keep scrolling: the reload has landed, so honour it.
+  // Deliberately unconditional — under Force Mode the top page may hold nothing
+  // new while the historical sweep below it is the entire point, and with Force
+  // off the first batch answers with the duplicate cutoff and stops it anyway.
+  if (RunIntent.take()) Scroller.start()
   AutoSync.schedule()
 })()

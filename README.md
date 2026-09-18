@@ -19,7 +19,7 @@ It runs a local server and uses a browser userscript to intercept the _exact sam
 
 ## Features
 
-- **🔄 Auto-Sync**: One-click auto-scroll to fetch your entire bookmark history.
+- **🔄 Auto-Sync**: One click reloads the bookmarks tab to pick up new saves, then carries on scrolling. New bookmarks only ever arrive at the top of the timeline, so a reload is the only thing that can fetch them — scrolling alone walks backwards. The tab also syncs itself every 30 minutes while it sits in the background.
 - **📹 Media Daemon**: Background worker automatically downloads highest-quality images and videos with **smart skipping** of existing files.
 - **🕰️ Timeline Fidelity**: Sets the file modification time to the **original tweet publication date**, keeping your local collection chronologically sorted.
 - **🗄️ SQLite Database**: Deduplicates tweets and stores metadata efficiently.
