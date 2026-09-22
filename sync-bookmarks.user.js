@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter Bookmarks Sync to Local
 // @namespace    http://tampermonkey.net/
-// @version      0.5
+// @version      0.6
 // @description  Intercept XHR to sync bookmarks, with auto-scroll and unattended periodic sync.
 // @author       Gemini
 // @downloadURL  https://gist.githubusercontent.com/wchenaf/0e2d69dbb0f044f457f43baefdca202a/raw/sync-bookmarks.user.js
@@ -16,7 +16,14 @@
 
 ;(function () {
   'use strict'
-  const RAW_SYNC_URL = 'http://localhost:41008/api/sync-raw'
+  // ⛔ 2026-09-23（H6）：TBD 守护（tbd.exe）已随 hgreport 从本机搬到 **NEIL-SERVER**
+  //    ⇒ 原来那句 `http://localhost:41008/...`（跟着浏览器所在机器走）**指的是本机、那里已经没有它了**
+  //    ⇒ 书签 URL 会**静默发不出去**（GM_xmlhttpRequest 失败只在控制台，页面上看不到）。
+  //    ⇒ 改成 server 的 **LAN 地址**。⚠️ 两个前提：
+  //      ① server 的防火墙必须放行 41008（只放 192.168.50.0/24，2026-09-23 已加）；
+  //      ② 因此**离开家里 LAN 时抓取不工作**（旧写法"跟浏览器走"的那个能力**没有了** ——
+  //         除非将来给 TBD 加自己的鉴权后经 nginx 暴露，那是另一件事）。
+  const RAW_SYNC_URL = 'http://192.168.50.101:41008/api/sync-raw'
 
   // How often an idle bookmarks tab reloads itself to pick up new bookmarks.
   const AUTO_RELOAD_MS = 30 * 60 * 1000
