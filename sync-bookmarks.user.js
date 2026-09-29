@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitter Bookmarks Sync to Local
 // @namespace    http://tampermonkey.net/
-// @version      0.6
+// @version      0.7
 // @description  Intercept XHR to sync bookmarks, with auto-scroll and unattended periodic sync.
 // @author       Gemini
 // @downloadURL  https://gist.githubusercontent.com/wchenaf/0e2d69dbb0f044f457f43baefdca202a/raw/sync-bookmarks.user.js
@@ -12,18 +12,27 @@
 // @run-at       document-start
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
+// @connect      127.0.0.1
 // ==/UserScript==
 
 ;(function () {
   'use strict'
-  // ⛔ 2026-09-23（H6）：TBD 守护（tbd.exe）已随 hgreport 从本机搬到 **NEIL-SERVER**
-  //    ⇒ 原来那句 `http://localhost:41008/...`（跟着浏览器所在机器走）**指的是本机、那里已经没有它了**
-  //    ⇒ 书签 URL 会**静默发不出去**（GM_xmlhttpRequest 失败只在控制台，页面上看不到）。
-  //    ⇒ 改成 server 的 **LAN 地址**。⚠️ 两个前提：
-  //      ① server 的防火墙必须放行 41008（只放 192.168.50.0/24，2026-09-23 已加）；
-  //      ② 因此**离开家里 LAN 时抓取不工作**（旧写法"跟浏览器走"的那个能力**没有了** ——
-  //         除非将来给 TBD 加自己的鉴权后经 nginx 暴露，那是另一件事）。
-  const RAW_SYNC_URL = 'http://192.168.50.101:41008/api/sync-raw'
+  // ⛔ 2026-09-30：**这个常量里不许再出现运行机 IP** —— 改 POST 自己本机的 agent（本地面）。
+  //
+  //    为什么必须改（实测事故，不是洁癖）：本文件 2026-09-23 起写死
+  //    `http://192.168.50.101:41008/api/sync-raw`，而 09-26 运行机网卡故障把 IP 换成了
+  //    `.20` ⇒ 这个常量**静默烂了 4 天**（tbd 那边来自本机的 POST 一条都没有），
+  //    而面板**还显示绿色的 `SYSTEM READY`**。
+  //    根因是结构性的：**浏览器读不到 neil-ops 注册表** ⇒ 凡是"跟着机器走的地址"写在这里
+  //    就一定会烂，而且没人会想到去改一个躺在浏览器里的常量（hgreport 的
+  //    `set_server_host.py` 当时就把它列为"射程外"）。
+  //
+  //    ⇒ 现在写的是**本机回环**：请求由**本机 agent** 接（`machines.NEIL-DESKTOP.local_routes`
+  //      的 `/tbd-sync-raw`，handler 在 hgreport 仓），跨机那一跳交给它 ——
+  //      运行机地址由那个 handler 从注册表**解析**（`registry.machine_host('NEIL-SERVER')`）。
+  //    ⚠️ 前提变成：① **本机 agent 在跑**（没它就没法抓）② 仍在家 LAN（handler 要连运行机）。
+  //    ⚠️ `@connect 127.0.0.1` 必须留着 —— 少了它 TM 会**静默拦掉**这个请求。
+  const RAW_SYNC_URL = 'http://127.0.0.1:50099/tbd-sync-raw'
 
   // How often an idle bookmarks tab reloads itself to pick up new bookmarks.
   const AUTO_RELOAD_MS = 30 * 60 * 1000
@@ -51,12 +60,15 @@
 
   const onSyncPage = () => SYNC_PATHS.some((p) => window.location.pathname.includes(p))
 
-  console.log('[TBD v0.5] Terminal UI Edition loaded.')
+  //: ⛔ 必须与头部的 `@version` 一致（它俩已经漂过一次：@version 0.6 时这里印 0.5）。
+  const SCRIPT_VER = '0.7'
+  console.log(`[TBD v${SCRIPT_VER}] Terminal UI Edition loaded.`)
 
   const UI = {
     el: null,
     btn: null,
     statusEl: null,
+    lastEl: null,
     forceBtn: null,
     timeout: null,
     isForce: false,
@@ -108,8 +120,15 @@
       this.statusEl.style.cssText =
         'color: #0f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; border-top: 1px dashed #333; padding-top: 6px; font-size: 11px;'
 
+      // 上一次同步的**结果**行 —— 见 lastResult() 的注释（它是失败唯一看得见的地方）。
+      this.lastEl = document.createElement('div')
+      this.lastEl.innerText = 'LAST —（本次打开还没同步过）'
+      this.lastEl.style.cssText =
+        'color: #888; font-size: 10px; border-top: 1px dashed #333; padding-top: 4px; max-width: 210px; overflow-wrap: anywhere;'
+
       this.el.appendChild(controls)
       this.el.appendChild(this.statusEl)
+      this.el.appendChild(this.lastEl)
 
       const monitor = () => {
         if (!document.body) {
@@ -146,6 +165,19 @@
           }
         }, 2000)
       }
+    },
+
+    // 上一次同步的**结果**，**持久**留在面板上。
+    // ⛔ 为什么必须有这一行（2026-09-30 实测事故）：`updateStatus` 对**非绿非灰**的颜色
+    //    一律 2 秒后回落到 `SYSTEM READY` —— **红色的失败也照落** ⇒ 面板在「一切正常」
+    //    与「连接彻底断了」两种情况下**显示完全一样**。2026-09-26 运行机换 IP 后，
+    //    这个脚本的 POST 全失败（`CONN FAILED`），而面板一直是绿的 `SYSTEM READY`
+    //    ⇒ 烂了 4 天没人知道。`SYSTEM READY` **不是失败判据，它是空闲文案**。
+    // ⇒ 结果位单独一行、**不设回落定时器**；⛔ 别把它并回 `updateStatus`（那正是这次踩的坑）。
+    lastResult(ok, text) {
+      const t = new Date().toTimeString().slice(0, 8)
+      this.lastEl.innerText = `LAST ${ok ? 'OK' : 'FAIL'} ${t} · ${text}`
+      this.lastEl.style.color = ok ? '#0f0' : '#ff0033'
     },
 
     toggleForce() {
@@ -291,15 +323,16 @@
 
     note(label) {
       this.count++
+      // 结果行是**持久**的 —— 它才是"失败了"唯一留得住的地方（`updateStatus` 2 秒回落）。
+      UI.lastResult(false, `${label} ${this.count}/${MAX_SYNC_FAILURES}`)
       if (this.count < MAX_SYNC_FAILURES) {
         UI.updateStatus(`${label} ${this.count}/${MAX_SYNC_FAILURES}`, '#ff0033')
         return
       }
       Scroller.stop()
-      // updateStatus reverts to the idle text after a couple of seconds, so the
-      // reason a run died would otherwise leave no trace on a tab nobody is
-      // watching.
+      // 控制台那条仍然留着：它带上下文，是事后取证的入口（结果行只有一行字）。
       console.error(`[TBD] ${label} x${this.count}, run aborted.`)
+      UI.lastResult(false, `ABORTED: ${label}`)
       UI.updateStatus(`ABORTED: ${label}`, '#ff0033')
     },
   }
@@ -325,6 +358,7 @@
       }
       Scroller.stop()
       console.log(`[TBD] End of bookmark timeline (${this.count} empty pages).`)
+      UI.lastResult(true, 'END（到时间线尽头）')
       UI.updateStatus('END', '#0f0')
     },
   }
@@ -414,6 +448,7 @@
                     SyncFailures.reset()
                     if (!UI.isForceMode()) {
                       Scroller.stop()
+                      UI.lastResult(true, `LIMIT REACHED（撞到已知书签 ⇒ 正常收工，本轮存 ${res.saved_count}）`)
                       UI.updateStatus('LIMIT REACHED', '#ff0033')
                     } else {
                       // Silent continuation in Force Mode
@@ -421,6 +456,7 @@
                     }
                   } else if (res.saved_count > 0) {
                     SyncFailures.reset()
+                    UI.lastResult(true, `SAVED:${res.saved_count}`)
                     UI.updateStatus(`SAVED:${res.saved_count}`, '#0f0')
                     // The backend did not find enough duplicates, so this page was
                     // largely new and more probably waits below it. A reload would
